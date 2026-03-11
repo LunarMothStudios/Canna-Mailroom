@@ -72,6 +72,14 @@ curl -X POST http://127.0.0.1:8787/process-now
 - Response continuity via `previous_response_id` (`app/ai_agent.py`)
 - Tool-call loop max depth: 6 rounds (`app/ai_agent.py`)
 
+## Open source project hygiene
+
+- License: [MIT](LICENSE)
+- Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- Security policy: [SECURITY.md](SECURITY.md)
+- CI: GitHub Actions compile check (`.github/workflows/ci.yml`)
+
 ## Documentation index
 
 - [docs/index.md](docs/index.md)
