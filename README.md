@@ -52,6 +52,8 @@ It can also use tools during replies:
 
 7. Send an email to `AGENT_EMAIL`, then reply in the same thread to verify session continuity.
 
+Default persona is defined in `SYSTEM_PROMPT.md` (currently: **Mellow Sloth** 🦥🌿).
+
 ## Key commands
 
 ```bash
