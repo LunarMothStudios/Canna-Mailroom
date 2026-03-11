@@ -31,6 +31,20 @@ class StateStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dead_letters (
+                    message_id TEXT PRIMARY KEY,
+                    thread_id TEXT,
+                    from_email TEXT,
+                    subject TEXT,
+                    error TEXT,
+                    attempts INTEGER DEFAULT 1,
+                    status TEXT DEFAULT 'dead_letter',
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
 
     def get_last_response_id(self, thread_id: str) -> Optional[str]:
         with self._conn() as conn:
@@ -64,3 +78,76 @@ class StateStore:
             conn.execute(
                 "INSERT OR IGNORE INTO processed_messages (message_id) VALUES (?)", (message_id,)
             )
+
+    def unmark_processed(self, message_id: str):
+        with self._conn() as conn:
+            conn.execute("DELETE FROM processed_messages WHERE message_id = ?", (message_id,))
+
+    def upsert_dead_letter(
+        self,
+        message_id: str,
+        error: str,
+        attempts: int,
+        thread_id: str | None = None,
+        from_email: str | None = None,
+        subject: str | None = None,
+        status: str = "dead_letter",
+    ):
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO dead_letters (
+                    message_id, thread_id, from_email, subject, error, attempts, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(message_id) DO UPDATE SET
+                  thread_id = COALESCE(excluded.thread_id, dead_letters.thread_id),
+                  from_email = COALESCE(excluded.from_email, dead_letters.from_email),
+                  subject = COALESCE(excluded.subject, dead_letters.subject),
+                  error = excluded.error,
+                  attempts = excluded.attempts,
+                  status = excluded.status,
+                  updated_at = CURRENT_TIMESTAMP
+                """,
+                (message_id, thread_id, from_email, subject, error[:4000], attempts, status),
+            )
+
+    def list_dead_letters(self, limit: int = 50) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT message_id, thread_id, from_email, subject, error, attempts, status, updated_at
+                FROM dead_letters
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+        return [
+            {
+                "message_id": row[0],
+                "thread_id": row[1],
+                "from_email": row[2],
+                "subject": row[3],
+                "error": row[4],
+                "attempts": row[5],
+                "status": row[6],
+                "updated_at": row[7],
+            }
+            for row in rows
+        ]
+
+    def mark_dead_letter_requeued(self, message_id: str):
+        with self._conn() as conn:
+            conn.execute(
+                """
+                UPDATE dead_letters
+                SET status = 'requeued', updated_at = CURRENT_TIMESTAMP
+                WHERE message_id = ?
+                """,
+                (message_id,),
+            )
+
+    def clear_dead_letter(self, message_id: str):
+        with self._conn() as conn:
+            conn.execute("DELETE FROM dead_letters WHERE message_id = ?", (message_id,))

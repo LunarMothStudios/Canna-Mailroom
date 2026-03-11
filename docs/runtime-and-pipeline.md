@@ -15,6 +15,7 @@ _Last verified against commit `7317103`._
 | 6. Tool calls (optional) | `EmailAgent._run_tool` | model function calls | function_call_output payloads |
 | 7. Send reply | `_send_reply` | to/subject/body/thread | Gmail sent message |
 | 8. Mark processed | `modify UNREAD`, state methods | msg/thread IDs | deduped, thread pointer updated |
+| 9. Retry/dead-letter | `GmailThreadWorker._process_message_with_retry` | raised exception | retries with backoff, then dead-letter persistence |
 
 ## Full run sequence
 
@@ -64,18 +65,13 @@ flowchart TD
     B -- Yes --> C[Fetch message detail]
     C --> D{Already processed?}
     D -- Yes --> N[Skip]
-    D -- No --> E[Extract + clean text]
-    E --> F{Text empty?}
-    F -- Yes --> M[Mark processed + skip]
-    F -- No --> G[Load thread context]
-    G --> H[Call OpenAI + tools]
-    H --> I[Send reply]
-    I --> J[Mark read]
-    J --> K[Persist state]
-    K --> L[Increment processed count]
+    D -- No --> E[Process message with retry wrapper]
+    E --> F{Success?}
+    F -- Yes --> G[Increment processed count]
+    F -- No --> H[Dead-letter + mark processed]
     N --> B
-    M --> B
-    L --> B
+    G --> B
+    H --> B
     Z --> A
 ```
 
@@ -84,18 +80,21 @@ flowchart TD
 | Failure point | Current behavior | Retry strategy present? |
 |---|---|---|
 | Google OAuth missing/invalid at startup | startup fails | No explicit retry |
-| Gmail list/get/send API error | exception bubbles and can break worker loop call | No |
-| OpenAI API error | exception bubbles | No |
-| Tool call arg parse (`json.loads`) error | exception bubbles | No |
-| SQLite transient error | exception bubbles | No |
+| Gmail list API error | logged and cycle returns without crash | No (next poll cycle retries naturally) |
+| Gmail get/send/modify API error (per message) | retried with exponential backoff | Yes (bounded by `RETRY_MAX_ATTEMPTS`) |
+| OpenAI API error (per message) | retried with exponential backoff for transient classes; dead-letter on exhaustion/non-transient | Yes |
+| Tool call arg parse (`json.loads`) error | treated as non-transient; message moved to dead-letter | No |
+| SQLite write/read error (per message) | may fail message run, then dead-letter path captures where possible | Partial |
 
 ## Checkpoints
 
 Current explicit checkpoints:
 - message-level dedupe via `processed_messages`
 - thread memory pointer via `thread_state`
+- dead-letter persistence via `dead_letters`
 
-No queue checkpoints and no dead-letter handling exist yet.
+Dead-letter messages are intentionally marked processed to prevent retry loops.
+Operators can explicitly requeue via `POST /dead-letter/requeue/{message_id}`.
 
 ## Job lifecycle (message-level)
 
@@ -107,6 +106,10 @@ stateDiagram-v2
     Parsed --> Skipped: empty body
     Parsed --> Generated
     Generated --> Replied
+    Generated --> RetryWait: transient failure
+    RetryWait --> Generated: next attempt
+    Generated --> DeadLettered: retries exhausted/non-transient failure
     Replied --> Finalized
+    DeadLettered --> Finalized
     Finalized --> [*]
 ```

@@ -35,7 +35,16 @@ def startup():
         system_prompt_path=settings.system_prompt_file,
     )
 
-    worker = GmailThreadWorker(gmail_service=gmail, agent_email=settings.agent_email, state=state, agent=agent)
+    worker = GmailThreadWorker(
+        gmail_service=gmail,
+        agent_email=settings.agent_email,
+        state=state,
+        agent=agent,
+        retry_max_attempts=settings.retry_max_attempts,
+        retry_base_delay_ms=settings.retry_base_delay_ms,
+        retry_max_delay_ms=settings.retry_max_delay_ms,
+        retry_jitter_ms=settings.retry_jitter_ms,
+    )
 
     worker_thread = threading.Thread(target=worker.run_forever, kwargs={"poll_seconds": settings.poll_seconds}, daemon=True)
     worker_thread.start()
@@ -48,6 +57,12 @@ def healthz():
         "agent_email": settings.agent_email,
         "poll_seconds": settings.poll_seconds,
         "worker_alive": bool(worker_thread and worker_thread.is_alive()),
+        "retry": {
+            "max_attempts": settings.retry_max_attempts,
+            "base_delay_ms": settings.retry_base_delay_ms,
+            "max_delay_ms": settings.retry_max_delay_ms,
+            "jitter_ms": settings.retry_jitter_ms,
+        },
     }
 
 
@@ -57,3 +72,20 @@ def process_now():
         return {"ok": False, "error": "worker not initialized"}
     count = worker.process_once()
     return {"ok": True, "processed": count}
+
+
+@app.get("/dead-letter")
+def dead_letter(limit: int = 50):
+    if not worker:
+        return {"ok": False, "error": "worker not initialized"}
+    clamped = max(1, min(limit, 200))
+    items = worker.state.list_dead_letters(limit=clamped)
+    return {"ok": True, "count": len(items), "items": items}
+
+
+@app.post("/dead-letter/requeue/{message_id}")
+def dead_letter_requeue(message_id: str):
+    if not worker:
+        return {"ok": False, "error": "worker not initialized"}
+    worker.requeue_dead_letter(message_id)
+    return {"ok": True, "requeued": message_id}

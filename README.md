@@ -63,6 +63,8 @@ make run          # start API + background worker
 
 curl http://127.0.0.1:8787/healthz
 curl -X POST http://127.0.0.1:8787/process-now
+curl http://127.0.0.1:8787/dead-letter
+curl -X POST http://127.0.0.1:8787/dead-letter/requeue/<message_id>
 ```
 
 ## What is implemented (from code)
@@ -74,6 +76,7 @@ curl -X POST http://127.0.0.1:8787/process-now
   - `processed_messages(message_id)` (`app/state.py`)
 - Response continuity via `previous_response_id` (`app/ai_agent.py`)
 - Tool-call loop max depth: 6 rounds (`app/ai_agent.py`)
+- Retry + backoff for transient failures with dead-letter persistence for exhausted runs (`app/gmail_worker.py`, `app/state.py`)
 
 ## Open source project hygiene
 

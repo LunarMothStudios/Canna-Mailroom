@@ -2,7 +2,7 @@
 
 _Last verified against commit `7317103`._
 
-This project has two persisted entities in SQLite (`app/state.py`) and several runtime payload shapes.
+This project has three persisted entities in SQLite (`app/state.py`) and several runtime payload shapes.
 
 ## Persisted tables
 
@@ -28,6 +28,26 @@ Columns:
 
 Write behavior:
 - insert ignore during processing (`mark_processed`)
+- explicit delete on operator requeue (`unmark_processed`)
+
+### `dead_letters`
+
+Purpose: persist failed message runs after retry exhaustion or non-transient failures.
+
+Columns:
+- `message_id TEXT PRIMARY KEY`
+- `thread_id TEXT`
+- `from_email TEXT`
+- `subject TEXT`
+- `error TEXT`
+- `attempts INTEGER`
+- `status TEXT` (`dead_letter` or `requeued`)
+- `updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`
+
+Write behavior:
+- upsert on failure terminal path (`upsert_dead_letter`)
+- status update on operator requeue (`mark_dead_letter_requeued`)
+- delete on successful replay (`clear_dead_letter`)
 
 ## ER diagram
 
@@ -42,6 +62,17 @@ erDiagram
     PROCESSED_MESSAGES {
         TEXT message_id PK
         DATETIME processed_at
+    }
+
+    DEAD_LETTERS {
+        TEXT message_id PK
+        TEXT thread_id
+        TEXT from_email
+        TEXT subject
+        TEXT error
+        INTEGER attempts
+        TEXT status
+        DATETIME updated_at
     }
 ```
 

@@ -22,6 +22,8 @@ At startup (`app/main.py`), the system:
 - **Gmail worker (`app/gmail_worker.py`)**
   - unread polling
   - inbound parsing + dedupe
+  - bounded retries with exponential backoff on transient errors
+  - dead-letter persistence on exhausted/non-transient failures
   - outbound send + mark read
 - **AI agent wrapper (`app/ai_agent.py`)**
   - OpenAI Responses API calls
