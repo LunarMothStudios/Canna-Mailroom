@@ -15,6 +15,7 @@ _Last verified against commit `7317103`._
 - [runtime-and-pipeline.md](runtime-and-pipeline.md) — end-to-end execution stages
 - [cli-reference.md](cli-reference.md) — all operator commands
 - [operations.md](operations.md) — day-1/day-2 runbook and incident handling
+- [deployment.md](deployment.md) — local + GCP + AWS deployment patterns
 - [security-and-safety.md](security-and-safety.md) — auth/secrets/risk boundaries
 - [testing-and-quality.md](testing-and-quality.md) — quality strategy and release checklist
 - [faq.md](faq.md) — practical Q&A

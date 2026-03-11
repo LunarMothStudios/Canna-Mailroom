@@ -80,6 +80,7 @@ curl -X POST http://127.0.0.1:8787/process-now
 - [docs/runtime-and-pipeline.md](docs/runtime-and-pipeline.md)
 - [docs/cli-reference.md](docs/cli-reference.md)
 - [docs/operations.md](docs/operations.md)
+- [docs/deployment.md](docs/deployment.md)
 - [docs/security-and-safety.md](docs/security-and-safety.md)
 - [docs/testing-and-quality.md](docs/testing-and-quality.md)
 - [docs/faq.md](docs/faq.md)
