@@ -20,18 +20,6 @@ class EmailAgent:
         return [
             {
                 "type": "function",
-                "name": "research_web",
-                "description": "Research the public web and return a concise cited summary.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                    },
-                    "required": ["query"],
-                },
-            },
-            {
-                "type": "function",
                 "name": "list_drive_files",
                 "description": "List files in Google Drive folder",
                 "parameters": {
@@ -83,20 +71,7 @@ class EmailAgent:
             },
         ]
 
-    def _research_web(self, query: str) -> dict[str, Any]:
-        response = self.client.responses.create(
-            model=self.model,
-            tools=[{"type": "web_search"}],
-            input=(
-                "Research the user's query and return a concise summary with source links.\n\n"
-                f"Query: {query}"
-            ),
-        )
-        return {"query": query, "summary": response.output_text.strip()}
-
     def _run_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
-        if name == "research_web":
-            return self._research_web(**args)
         if name == "list_drive_files":
             return self.tools.list_drive_files(**args)
         if name == "create_google_doc":

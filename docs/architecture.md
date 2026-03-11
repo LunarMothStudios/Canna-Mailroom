@@ -82,12 +82,12 @@ flowchart LR
 ## Tooling boundaries
 
 Current model-callable tools (hardcoded in `EmailAgent._tool_specs`):
-- `research_web` (implemented via nested OpenAI Responses API call with `web_search`)
 - `list_drive_files`
 - `create_google_doc`
 - `append_google_doc`
 - `read_google_doc`
 
+No web search tool is exposed.
 No direct Gmail tool is exposed to the model (Gmail handling is app-owned worker logic).
 
 ## Non-goals in current implementation
