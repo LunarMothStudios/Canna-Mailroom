@@ -1,0 +1,23 @@
+[project]
+name = "canna-mailroom"
+version = "0.1.0"
+description = "Email-native AI agent with Gmail + Drive + Docs tool use"
+requires-python = ">=3.11"
+dependencies = [
+  "openai>=1.108.1",
+  "fastapi>=0.116.1",
+  "uvicorn>=0.35.0",
+  "python-dotenv>=1.1.1",
+  "pydantic>=2.11.7",
+  "google-api-python-client>=2.179.0",
+  "google-auth-oauthlib>=1.2.2",
+  "google-auth-httplib2>=0.2.0",
+  "tenacity>=9.1.2"
+]
+
+[tool.setuptools]
+packages = ["app"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
