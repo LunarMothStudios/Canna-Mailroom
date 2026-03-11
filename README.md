@@ -51,7 +51,7 @@ It can also use Google Workspace tools during replies:
 
 7. Send an email to `AGENT_EMAIL`, then reply in the same thread to verify session continuity.
 
-Default persona is defined in `SYSTEM_PROMPT.md` (currently: **Kush Courier** 🌿).
+Default persona is defined in `SYSTEM_PROMPT.md` (currently: **Mellow Sloth** 🦥🌿).
 
 ## Key commands
 
