@@ -93,6 +93,15 @@ curl -X POST http://127.0.0.1:8787/process-now
 - This MVP processes unread messages (`is:unread -from:me`).
 - It strips quoted prior chains before sending user content to model.
 - It marks inbound as read once processed.
+- It uses Gmail `threadId` as session key and OpenAI `previous_response_id` for thread memory continuity.
+
+## Documentation
+
+- `docs/SETUP.md` — detailed local setup and auth flow
+- `docs/ARCHITECTURE.md` — full component and data-flow map
+- `docs/OPERATIONS.md` — runtime behavior, recovery, and scaling notes
+- `docs/SECURITY.md` — current scope posture + hardening plan
+- `docs/TROUBLESHOOTING.md` — common failures and fixes
 
 ## Next hardening steps
 
