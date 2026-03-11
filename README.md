@@ -4,7 +4,8 @@ _Last verified against commit `7317103`._
 
 Canna Mailroom is an **email-native AI agent runtime**. It watches a Gmail inbox, treats each Gmail thread as a session, and replies in-thread using OpenAI Responses API context chaining.
 
-It can also use Google Workspace tools during replies:
+It can also use tools during replies:
+- research the public web (`research_web`, via OpenAI web search tool)
 - read/list files in Drive
 - create Google Docs
 - append to existing Docs
