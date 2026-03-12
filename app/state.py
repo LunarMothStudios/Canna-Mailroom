@@ -45,6 +45,17 @@ class StateStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS outbound_replies (
+                    message_id TEXT PRIMARY KEY,
+                    sent_message_id TEXT,
+                    status TEXT DEFAULT 'sent',
+                    source TEXT,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
 
     def get_last_response_id(self, thread_id: str) -> Optional[str]:
         with self._conn() as conn:
@@ -82,6 +93,28 @@ class StateStore:
     def unmark_processed(self, message_id: str):
         with self._conn() as conn:
             conn.execute("DELETE FROM processed_messages WHERE message_id = ?", (message_id,))
+
+    def mark_reply_sent(self, message_id: str, sent_message_id: str | None = None, source: str = "api_send"):
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO outbound_replies (message_id, sent_message_id, status, source)
+                VALUES (?, ?, 'sent', ?)
+                ON CONFLICT(message_id) DO UPDATE SET
+                  sent_message_id = COALESCE(excluded.sent_message_id, outbound_replies.sent_message_id),
+                  status = 'sent',
+                  source = excluded.source,
+                  updated_at = CURRENT_TIMESTAMP
+                """,
+                (message_id, sent_message_id, source),
+            )
+
+    def has_reply_been_sent(self, message_id: str) -> bool:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM outbound_replies WHERE message_id = ? AND status = 'sent'", (message_id,)
+            ).fetchone()
+            return row is not None
 
     def upsert_dead_letter(
         self,
@@ -136,6 +169,20 @@ class StateStore:
             }
             for row in rows
         ]
+
+    def list_requeued_message_ids(self, limit: int = 20) -> list[str]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT message_id
+                FROM dead_letters
+                WHERE status = 'requeued'
+                ORDER BY updated_at ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [row[0] for row in rows]
 
     def mark_dead_letter_requeued(self, message_id: str):
         with self._conn() as conn:

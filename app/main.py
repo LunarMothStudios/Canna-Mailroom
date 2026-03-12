@@ -84,8 +84,8 @@ def dead_letter(limit: int = 50):
 
 
 @app.post("/dead-letter/requeue/{message_id}")
-def dead_letter_requeue(message_id: str):
+def dead_letter_requeue(message_id: str, process_now: bool = True):
     if not worker:
         return {"ok": False, "error": "worker not initialized"}
-    worker.requeue_dead_letter(message_id)
-    return {"ok": True, "requeued": message_id}
+    processed = worker.requeue_dead_letter(message_id, process_immediately=process_now)
+    return {"ok": True, "requeued": message_id, "processed_now": processed}

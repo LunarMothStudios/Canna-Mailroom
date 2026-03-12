@@ -70,7 +70,14 @@ class GmailThreadWorker:
             out[h.get("name", "").lower()] = h.get("value", "")
         return out
 
-    def _send_reply(self, to_email: str, subject: str, body: str, thread_id: str, in_reply_to: str | None):
+    def _send_reply(
+        self,
+        to_email: str,
+        subject: str,
+        body: str,
+        thread_id: str,
+        in_reply_to: str | None,
+    ) -> str | None:
         msg = MIMEText(body)
         msg["to"] = to_email
         msg["from"] = self.agent_email
@@ -80,10 +87,47 @@ class GmailThreadWorker:
             msg["References"] = in_reply_to
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-        self.gmail.users().messages().send(
-            userId="me",
-            body={"raw": raw, "threadId": thread_id},
-        ).execute()
+        resp = (
+            self.gmail.users()
+            .messages()
+            .send(
+                userId="me",
+                body={"raw": raw, "threadId": thread_id},
+            )
+            .execute()
+        )
+        return resp.get("id")
+
+    def _find_existing_sent_reply(self, thread_id: str | None, in_reply_to: str | None) -> str | None:
+        if not thread_id or not in_reply_to:
+            return None
+
+        try:
+            thread = (
+                self.gmail.users()
+                .threads()
+                .get(
+                    userId="me",
+                    id=thread_id,
+                    format="metadata",
+                    metadataHeaders=["From", "In-Reply-To"],
+                )
+                .execute()
+            )
+        except Exception:
+            return None
+
+        target = in_reply_to.strip()
+        for message in thread.get("messages", []):
+            payload = message.get("payload", {})
+            headers = self._message_headers(payload.get("headers", []))
+            from_header = headers.get("from", "").lower()
+            in_reply_header = headers.get("in-reply-to", "").strip()
+
+            if self.agent_email in from_header and in_reply_header == target:
+                return message.get("id")
+
+        return None
 
     def _is_transient_error(self, err: Exception) -> bool:
         if isinstance(err, HttpError):
@@ -127,6 +171,32 @@ class GmailThreadWorker:
         except Exception:
             return {"thread_id": None, "from_email": None, "subject": None}
 
+    def _send_with_idempotency_guard(
+        self,
+        msg_id: str,
+        to_email: str,
+        subject: str,
+        body: str,
+        thread_id: str,
+        in_reply_to: str | None,
+    ):
+        if self.state.has_reply_been_sent(msg_id):
+            return
+
+        existing_sent_id = self._find_existing_sent_reply(thread_id=thread_id, in_reply_to=in_reply_to)
+        if existing_sent_id:
+            self.state.mark_reply_sent(msg_id, sent_message_id=existing_sent_id, source="thread_scan")
+            return
+
+        sent_message_id = self._send_reply(
+            to_email=to_email,
+            subject=subject,
+            body=body,
+            thread_id=thread_id,
+            in_reply_to=in_reply_to,
+        )
+        self.state.mark_reply_sent(msg_id, sent_message_id=sent_message_id, source="api_send")
+
     def _process_message_once(self, msg_id: str) -> bool:
         full = (
             self.gmail.users()
@@ -159,7 +229,8 @@ class GmailThreadWorker:
             email_metadata={"from": from_header, "subject": subject},
         )
 
-        self._send_reply(
+        self._send_with_idempotency_guard(
+            msg_id=msg_id,
             to_email=email.utils.parseaddr(from_header)[1] or from_header,
             subject=subject,
             body=reply,
@@ -230,28 +301,52 @@ class GmailThreadWorker:
             self.state.mark_processed(msg_id)
         return False
 
-    def requeue_dead_letter(self, message_id: str):
+    def process_message_by_id(self, message_id: str) -> bool:
+        if self.state.is_processed(message_id):
+            return False
+        return self._process_message_with_retry(message_id)
+
+    def requeue_dead_letter(self, message_id: str, process_immediately: bool = False) -> bool:
         self.state.mark_dead_letter_requeued(message_id)
         self.state.unmark_processed(message_id)
 
+        if process_immediately:
+            return self.process_message_by_id(message_id)
+
+        return True
+
     def process_once(self) -> int:
         q = "is:unread -from:me"
+        unread_ids: list[str] = []
+
         try:
-            msgs = (
-                self.gmail.users()
-                .messages()
-                .list(userId="me", q=q, maxResults=20)
-                .execute()
-                .get("messages", [])
-            )
+            unread_ids = [
+                m["id"]
+                for m in (
+                    self.gmail.users()
+                    .messages()
+                    .list(userId="me", q=q, maxResults=20)
+                    .execute()
+                    .get("messages", [])
+                )
+            ]
         except Exception as err:
             print(f"Failed to list unread messages: {err.__class__.__name__}: {err}")
-            return 0
+
+        # Requeued dead-letters must be processable even when no longer unread.
+        requeued_ids = self.state.list_requeued_message_ids(limit=20)
+
+        candidate_ids: list[str] = []
+        seen: set[str] = set()
+        for msg_id in requeued_ids + unread_ids:
+            if msg_id in seen:
+                continue
+            seen.add(msg_id)
+            candidate_ids.append(msg_id)
 
         processed_count = 0
 
-        for msg_ref in msgs:
-            msg_id = msg_ref["id"]
+        for msg_id in candidate_ids:
             if self.state.is_processed(msg_id):
                 continue
 
