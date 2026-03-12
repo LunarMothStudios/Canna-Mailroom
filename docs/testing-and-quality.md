@@ -1,77 +1,129 @@
-# Testing and Quality
+# Testing And Quality
 
-_Last verified against commit `7317103`._
+_Last verified against commit `b09c4f1`._
 
-## Current test strategy
+## Current Quality Strategy
 
-There is currently **no automated test suite** in repository. Quality assurance is manual + smoke-run based.
+There is no automated test suite in the repository today. The current quality bar is:
 
-## What is covered today
+- Python import and syntax validation through `compileall`
+- manual bring-up with real credentials
+- manual end-to-end mailbox testing
+- a basic GitHub Actions compile check
 
-- Python syntax/import health can be checked via `compileall`
-- Runtime health endpoint verifies process + worker liveness
-- End-to-end mailbox behavior is manually testable with real Gmail thread
+This is sufficient for a local MVP, not for high-confidence production changes.
 
-## What is not covered today
+## Current Coverage
 
-- unit tests for parsing and state behavior
-- integration tests for Gmail/Drive/Docs wrappers
-- contract tests for OpenAI tool-call loop
-- failure-injection tests
-- performance/load testing
+| Area | Current coverage | How it is validated today |
+|---|---|---|
+| package import and syntax | minimal automated | `python -m compileall app scripts` and CI |
+| startup wiring | manual | `make run` plus `/healthz` |
+| Gmail worker behavior | manual | real mailbox testing |
+| OpenAI reply generation | manual | send a test email and inspect the reply |
+| Drive and Docs tool paths | manual | prompt the agent to use those tools |
+| SQLite state behavior | manual | inspect `state.db` and endpoint behavior |
+| retry and dead-letter behavior | partial manual | provoke failures and inspect `/dead-letter` |
 
-## Manual quality checks
+## What Is Not Covered
+
+- unit tests for parsing helpers
+- unit tests for `StateStore`
+- mocked integration tests for Gmail, Drive, Docs, and OpenAI
+- contract tests for tool schema and tool handler consistency
+- regression tests for retry classification
+- performance or load testing
+
+## Current Automated Check
+
+GitHub Actions currently runs:
 
 ```bash
-# 1) install + run
+python -m compileall app scripts
+```
+
+That validates importability and syntax only.
+
+## How To Run Current Quality Checks
+
+### Compile Check
+
+```bash
+source .venv/bin/activate
+python -m compileall app scripts
+```
+
+### Smoke Run
+
+```bash
 make setup
 make auth
 make run
-
-# 2) health
 curl http://127.0.0.1:8787/healthz
-
-# 3) force one cycle
 curl -X POST http://127.0.0.1:8787/process-now
 ```
 
-Functional checks:
-- agent replies in same thread
-- reply context carries across turns
-- docs tool actions complete when requested by prompt
+### Functional Manual Checks
 
-## Suggested automated test plan
+Verify all of the following against a real mailbox:
 
-1. **Unit tests**
-   - `clean_reply_text`
-   - `extract_plain_text`
-   - `StateStore` read/write semantics
-2. **Integration tests (mocked APIs)**
-   - Gmail worker happy path
-   - dedupe behavior
-   - OpenAI function-call loop with fake responses
-3. **Contract tests**
-   - ensure tool schema names match executable handlers
-4. **Operational tests**
-   - startup with missing env/creds should fail clearly
+- the app starts successfully
+- `/healthz` reports `worker_alive=true`
+- a new email receives a reply
+- a second reply in the same Gmail thread preserves continuity
+- a prompt that requests Drive or Docs work actually uses the tool path successfully
+- dead-letter inspection and requeue work as expected
 
-## Release readiness checklist
+## Recommended First Automated Tests
 
-- [ ] `.env.example` matches real required settings
-- [ ] onboarding docs tested on fresh machine
-- [ ] OAuth flow validated end-to-end
-- [ ] health endpoint validated
-- [ ] no secrets committed
-- [ ] smoke run with at least 2-thread conversation verified
-- [ ] incident rollback steps tested
+### Unit Tests
 
-## Quality gate model
+- `clean_reply_text()`
+- `extract_plain_text()`
+- `StateStore` read and write semantics
+- retry delay calculation and transient error classification
+
+### Mocked Integration Tests
+
+- happy-path `GmailThreadWorker._process_message_once()`
+- skip behavior for self-messages and empty messages
+- send idempotency guard behavior
+- dead-letter replay flow
+- `EmailAgent` tool loop with fake OpenAI responses
+
+### Contract Tests
+
+- every tool in `_tool_specs()` maps to an executable handler
+- API endpoints return documented fields
+
+## Release Readiness Checklist
+
+- [ ] `.env.example` matches the runtime configuration surface in `app/settings.py`
+- [ ] README quickstart works on a fresh machine
+- [ ] `make auth` succeeds with a fresh `credentials.json`
+- [ ] `make run` starts and `/healthz` reports `worker_alive=true`
+- [ ] at least one end-to-end email thread has been verified
+- [ ] dead-letter inspect and requeue flow has been exercised
+- [ ] no secrets or tokens are committed
+- [ ] docs were updated for any runtime behavior change
+
+## Quality Gate Model
 
 ```mermaid
 flowchart LR
-    A[Code change] --> B[Docs updated]
-    B --> C[Local smoke run]
-    C --> D{Health + thread test pass?}
-    D -- No --> E[Fix + rerun]
-    D -- Yes --> F[Commit]
+    Change["Code or docs change"] --> Compile["Run compileall"]
+    Compile --> Smoke["Run local smoke test"]
+    Smoke --> Thread{"Real thread behavior correct?"}
+    Thread -- No --> Fix["Fix and repeat"]
+    Thread -- Yes --> Ship["Ready to commit or release"]
 ```
+
+## Practical Next Step
+
+The highest-value next investment is a small mocked test suite around:
+
+1. `StateStore`
+2. `GmailThreadWorker`
+3. `EmailAgent` tool loop
+
+Those three areas cover most of the repo's behavioral risk.

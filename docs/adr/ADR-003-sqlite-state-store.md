@@ -1,24 +1,30 @@
-# ADR-003: Use SQLite for Local Runtime State
+# ADR-003: Use SQLite For Local Runtime State
 
 - Status: Accepted
 - Date: 2026-03-11
-- Last verified against commit `7317103`
+- Last verified against commit `b09c4f1`
 
 ## Context
-MVP needs minimal persistence for dedupe and thread continuity.
+
+The runtime needs small but durable state for thread continuity, dedupe, dead-letter handling, and outbound send tracking. The target environment is still a local or single-host MVP.
 
 ## Decision
-Use local SQLite (`state.db`) with lazy schema init in application code.
+
+Use a local SQLite database file and create the schema lazily at startup from application code.
 
 ## Consequences
-### Positive
-- zero infrastructure dependency
-- easy local portability
 
-### Negative
-- not ideal for multi-instance concurrency
-- no migration/versioning framework yet
+Positive:
+- zero additional infrastructure
+- easy to back up or inspect with standard tools
+- enough durability for one mailbox and one worker
 
-## Evidence in code
-- `app/settings.py` (`STATE_DB`)
-- `app/state.py` (`CREATE TABLE IF NOT EXISTS` + read/write methods)
+Negative:
+- not suitable for coordinated multi-instance processing
+- no formal migration framework exists yet
+- file loss resets memory, dedupe, and replay state
+
+## Evidence In Code
+
+- `app/settings.py` defines `STATE_DB`
+- `app/state.py` creates and accesses the schema

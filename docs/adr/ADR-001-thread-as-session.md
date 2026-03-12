@@ -1,25 +1,30 @@
-# ADR-001: Use Gmail Thread ID as Session Key
+# ADR-001: Use Gmail Thread ID As Session Key
 
 - Status: Accepted
 - Date: 2026-03-11
-- Last verified against commit `7317103`
+- Last verified against commit `b09c4f1`
 
 ## Context
-The product requirement is email-native conversations with continuity per thread.
+
+The product needs email-native continuity without inventing a second session system. Gmail already groups related conversation turns under `threadId`.
 
 ## Decision
-Use Gmail `threadId` as the canonical session key and store latest OpenAI `response.id` in `thread_state`.
+
+Use Gmail `threadId` as the canonical conversation key and persist the latest OpenAI `response.id` for that thread in `thread_state`.
 
 ## Consequences
-### Positive
-- natural alignment with user email behavior
-- no separate session identifiers required
 
-### Negative
-- context continuity depends on user staying in same Gmail thread
-- no cross-thread memory stitching
+Positive:
+- aligns directly with how users already experience an email thread
+- keeps the state model very small
+- makes replay and inspection easier because thread identity comes from Gmail itself
 
-## Evidence in code
-- `app/gmail_worker.py` (`thread_id = full.get("threadId")`)
-- `app/state.py` (`thread_state` table)
-- `app/ai_agent.py` (`previous_response_id`)
+Negative:
+- continuity is lost when a human starts a new Gmail thread
+- there is no memory stitching across separate threads
+
+## Evidence In Code
+
+- `app/gmail_worker.py` reads `threadId` from Gmail messages
+- `app/state.py` persists `thread_state`
+- `app/ai_agent.py` sends `previous_response_id`

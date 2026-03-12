@@ -1,115 +1,182 @@
-# Runtime and Pipeline
+# Runtime And Pipeline
 
-_Last verified against commit `7317103`._
+_Last verified against commit `b09c4f1`._
 
-## Stage-by-stage execution
+This document follows the actual message-processing flow implemented in `app/gmail_worker.py`, `app/ai_agent.py`, and `app/state.py`.
 
-| Stage | Module | Input | Output |
+## Stage-By-Stage Execution
+
+| Stage | Code path | Input | Output |
 |---|---|---|---|
-| 0. Startup | `app/main.py` | env + files | initialized worker and clients |
-| 1. Poll | `GmailThreadWorker.process_once` | Gmail query | list of unread messages |
-| 2. Fetch detail | `gmail.users.messages.get` | message id | full message payload |
-| 3. Normalize | `extract_plain_text`, `clean_reply_text` | Gmail payload | cleaned user text |
-| 4. Restore context | `StateStore.get_last_response_id` | thread_id | prior response id or null |
-| 5. Generate | `EmailAgent.respond_in_thread` | text + previous_response_id | response text + new response id |
-| 6. Tool calls (optional) | `EmailAgent._run_tool` | model function calls | function_call_output payloads |
-| 7. Send reply | `_send_reply` | to/subject/body/thread | Gmail sent message |
-| 8. Mark processed | `modify UNREAD`, state methods | msg/thread IDs | deduped, thread pointer updated |
-| 9. Retry/dead-letter | `GmailThreadWorker._process_message_with_retry` | raised exception | retries with backoff, then dead-letter persistence |
+| 0. Startup | `app.main.startup()` | env vars, prompt file, OAuth files | initialized services, state store, agent, and worker thread |
+| 1. Build candidate set | `GmailThreadWorker.process_once()` | Gmail query plus requeued dead letters | ordered list of candidate message IDs |
+| 2. Fetch message | `users.messages.get(..., format="full")` | Gmail message ID | full Gmail message payload |
+| 3. Early exits and normalization | `_message_headers()`, `extract_plain_text()`, `clean_reply_text()` | Gmail payload | cleaned plain-text user input or skip |
+| 4. Restore thread context | `StateStore.get_last_response_id()` | Gmail `threadId` | previous OpenAI response ID or `None` |
+| 5. Generate reply | `EmailAgent.respond_in_thread()` | cleaned input, email metadata, previous response ID | final reply text and new response ID |
+| 6. Execute model tool loop | `EmailAgent._run_tool()` | function calls emitted by the model | tool outputs fed back into the model |
+| 7. Send with idempotency guard | `_send_with_idempotency_guard()` | inbound message ID, reply body, thread metadata | existing sent reply record or new Gmail send |
+| 8. Finalize success path | Gmail `modify()` plus state writes | message ID and thread ID | message marked read, thread pointer updated, processed recorded |
+| 9. Retry or dead-letter | `_process_message_with_retry()` | raised exception | retry with backoff or terminal dead-letter record |
 
-## Full run sequence
+## Full Run Sequence
 
 ```mermaid
 sequenceDiagram
-    participant S as Sender
-    participant G as Gmail API
-    participant W as GmailThreadWorker
-    participant DB as SQLite StateStore
-    participant A as EmailAgent
-    participant O as OpenAI API
-    participant T as Workspace Tools
+    participant Sender as Sender
+    participant Gmail as Gmail API
+    participant Worker as GmailThreadWorker
+    participant DB as StateStore
+    participant Agent as EmailAgent
+    participant OpenAI as OpenAI API
+    participant Tools as GoogleWorkspaceTools
 
-    S->>G: Sends email
-    W->>G: list unread (is:unread -from:me)
-    G-->>W: message ids
-    W->>G: get full message
-    G-->>W: payload + threadId
-    W->>DB: is_processed(message_id)?
-    DB-->>W: false
-    W->>DB: get_last_response_id(threadId)
-    DB-->>W: response id / null
-    W->>A: respond_in_thread(text, threadId, prev)
-    A->>O: responses.create(...)
-    O-->>A: response or function_call
+    Sender->>Gmail: send email
+    Worker->>Gmail: list unread messages
+    Worker->>DB: list requeued dead letters
+    Gmail-->>Worker: unread message IDs
+    Worker->>Gmail: fetch full message
+    Gmail-->>Worker: payload and threadId
+    Worker->>DB: is_processed(message_id)
+    DB-->>Worker: false
+    Worker->>DB: get_last_response_id(threadId)
+    DB-->>Worker: response ID or null
+    Worker->>Agent: respond_in_thread(...)
+    Agent->>OpenAI: responses.create(...)
+    OpenAI-->>Agent: response or function calls
 
-    alt function calls present
-      A->>T: run tool(s)
-      T-->>A: tool output JSON
-      A->>O: responses.create(previous_response_id=response.id, tool output)
-      O-->>A: final response
+    alt model requests tool calls
+        Agent->>Tools: run tool call(s)
+        Tools-->>Agent: JSON tool output
+        Agent->>OpenAI: responses.create(previous_response_id, tool output)
+        OpenAI-->>Agent: final response
     end
 
-    A-->>W: final text + new response_id
-    W->>G: send reply in same thread
-    W->>G: remove UNREAD label
-    W->>DB: set_last_response_id(threadId,new_id)
-    W->>DB: mark_processed(message_id)
+    Agent-->>Worker: reply text and response ID
+    Worker->>DB: has_reply_been_sent(message_id)
+    alt reply already recorded
+        DB-->>Worker: true
+    else reply not recorded
+        Worker->>Gmail: inspect thread for existing sent reply
+        alt sent reply already exists in thread
+            Worker->>DB: mark_reply_sent(source=thread_scan)
+        else no sent reply found
+            Worker->>Gmail: send reply
+            Gmail-->>Worker: sent message ID
+            Worker->>DB: mark_reply_sent(source=api_send)
+        end
+    end
+
+    Worker->>Gmail: remove UNREAD label from inbound message
+    Worker->>DB: set_last_response_id(threadId, response_id)
+    Worker->>DB: mark_processed(message_id)
+    Worker->>DB: clear_dead_letter(message_id)
 ```
 
-## Pipeline flow and checkpoints
+## Candidate Selection And Processing Flow
+
+`process_once()` does not only look at unread Gmail messages. It also pulls `requeued` dead-letter message IDs from SQLite so an operator can replay a message even if it is no longer unread.
 
 ```mermaid
 flowchart TD
-    A[Poll unread] --> B{Any messages?}
-    B -- No --> Z[Sleep POLL_SECONDS]
-    B -- Yes --> C[Fetch message detail]
-    C --> D{Already processed?}
-    D -- Yes --> N[Skip]
-    D -- No --> E[Process message with retry wrapper]
-    E --> F{Success?}
-    F -- Yes --> G[Increment processed count]
-    F -- No --> H[Dead-letter + mark processed]
-    N --> B
-    G --> B
-    H --> B
-    Z --> A
+    Poll["List unread Gmail messages"] --> Merge["Merge with requeued dead-letter IDs"]
+    Requeue["List requeued dead-letter IDs"] --> Merge
+    Merge --> Dedupe["Remove duplicate IDs"]
+    Dedupe --> Loop["Process each candidate"]
+    Loop --> Check{"Already processed?"}
+    Check -- Yes --> Skip["Skip message"]
+    Check -- No --> Retry["Run retry wrapper"]
+    Retry --> Success{"Success?"}
+    Success -- Yes --> Count["Increment processed count"]
+    Success -- No --> Next["Continue to next message"]
+    Skip --> Next
+    Count --> Next
 ```
 
-## Failure points and current behavior
+## Success Path Details
 
-| Failure point | Current behavior | Retry strategy present? |
+The worker considers a message successfully processed when:
+
+1. it fetches and parses the Gmail payload,
+2. it obtains a final reply from the agent,
+3. it passes the send idempotency guard,
+4. it removes the `UNREAD` label from the inbound message,
+5. it updates `thread_state`,
+6. it records the message in `processed_messages`,
+7. it clears any stale `dead_letters` row for that message.
+
+Messages skipped because they are self-originated or empty are also marked processed, but they do not increment the success counter returned by `/process-now`.
+
+## Retry Logic
+
+Transient failure handling is implemented entirely inside `GmailThreadWorker._process_message_with_retry()`.
+
+- Retry count: `RETRY_MAX_ATTEMPTS`
+- Base delay: `RETRY_BASE_DELAY_MS`
+- Max delay: `RETRY_MAX_DELAY_MS`
+- Jitter: `RETRY_JITTER_MS`
+
+Transient classification sources:
+- Google `HttpError` status in `{408, 409, 425, 429, 500, 502, 503, 504}`
+- exception attribute `status_code` in the same set
+- exception class names containing tokens such as `timeout`, `ratelimit`, `connection`, `temporar`, or `internalserver`
+
+```mermaid
+flowchart TD
+    Err["Exception raised"] --> Classify{"Transient?"}
+    Classify -- Yes --> Attempts{"Attempts remaining?"}
+    Attempts -- Yes --> Sleep["Exponential backoff plus jitter"]
+    Sleep --> Retry["Retry message"]
+    Attempts -- No --> Dead["Write dead_letters row"]
+    Classify -- No --> Dead
+    Dead --> Mark["mark_processed(message_id)"]
+```
+
+## Failure Points And Actual Behavior
+
+| Failure point | Current behavior | Retry? |
 |---|---|---|
-| Google OAuth missing/invalid at startup | startup fails | No explicit retry |
-| Gmail list API error | logged and cycle returns without crash | No (next poll cycle retries naturally) |
-| Gmail get/send/modify API error (per message) | retried with exponential backoff | Yes (bounded by `RETRY_MAX_ATTEMPTS`) |
-| OpenAI API error (per message) | retried with exponential backoff for transient classes; dead-letter on exhaustion/non-transient | Yes |
-| Tool call arg parse (`json.loads`) error | treated as non-transient; message moved to dead-letter | No |
-| SQLite write/read error (per message) | may fail message run, then dead-letter path captures where possible | Partial |
+| Missing or invalid Google credentials at startup | app startup fails before worker thread begins | No |
+| Gmail unread list call fails | prints error and returns zero processed for that cycle | Natural retry on next poll |
+| Gmail full-message fetch fails | message run enters retry wrapper | Yes |
+| OpenAI Responses API call fails | message run enters retry wrapper | Yes |
+| Tool argument JSON parsing fails | treated as terminal error and dead-lettered | No |
+| Tool execution fails | depends on thrown exception classification | Usually yes if transient |
+| Gmail thread scan for prior sent reply fails | ignored, worker falls back to send attempt | No separate retry |
+| Gmail send or label-modify fails | message run enters retry wrapper | Yes |
+| SQLite read or write fails during message run | message run fails and usually dead-letters | Partial |
 
-## Checkpoints
+## Explicit Checkpoints
 
-Current explicit checkpoints:
-- message-level dedupe via `processed_messages`
-- thread memory pointer via `thread_state`
-- dead-letter persistence via `dead_letters`
+Current checkpointing mechanisms:
 
-Dead-letter messages are intentionally marked processed to prevent retry loops.
-Operators can explicitly requeue via `POST /dead-letter/requeue/{message_id}`.
+- `processed_messages`: inbound message dedupe
+- `thread_state`: conversation continuity pointer
+- `dead_letters`: failed message tracking and replay queue
+- `outbound_replies`: outbound send idempotency tracking
 
-## Job lifecycle (message-level)
+Important behaviors:
+
+- Dead-lettered messages are marked processed to avoid infinite retry loops.
+- Requeueing a dead-letter row changes its status to `requeued` and removes the processed-message dedupe row.
+- Successful replay deletes the dead-letter row again.
+
+## Job Lifecycle
 
 ```mermaid
 stateDiagram-v2
     [*] --> Discovered
-    Discovered --> Skipped: already processed or self-message
-    Discovered --> Parsed
-    Parsed --> Skipped: empty body
-    Parsed --> Generated
-    Generated --> Replied
+    Discovered --> Skipped: already processed
+    Discovered --> Loaded: fetch full message
+    Loaded --> Skipped: self-message
+    Loaded --> Skipped: empty extracted text
+    Loaded --> Generated: reply generation succeeds
+    Generated --> Replied: send path succeeds
     Generated --> RetryWait: transient failure
     RetryWait --> Generated: next attempt
-    Generated --> DeadLettered: retries exhausted/non-transient failure
-    Replied --> Finalized
-    DeadLettered --> Finalized
+    Generated --> DeadLettered: retries exhausted or non-transient failure
+    Replied --> Finalized: persist state and mark processed
+    DeadLettered --> Finalized: persist dead letter and mark processed
+    Skipped --> Finalized
     Finalized --> [*]
 ```

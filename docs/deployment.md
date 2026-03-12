@@ -1,49 +1,66 @@
-# Deployment Guide (Local, GCP, AWS)
+# Deployment Guide
 
-_Last verified against commit `113f40f`._
+_Last verified against commit `b09c4f1`._
 
-This guide covers practical deployment patterns for the current implementation:
-- local machine
-- Google Cloud Platform (GCP)
-- Amazon Web Services (AWS)
+This guide covers deployment options that fit the current codebase. The current runtime is a single FastAPI process with an in-process polling worker, local OAuth files, and local SQLite state.
 
-> Current runtime is a single-process FastAPI app that starts an in-process polling worker thread (`app/main.py`).
+## Deployment Fit Summary
 
----
+| Environment | Fit today | Why |
+|---|---|---|
+| local machine | best fit | matches local OAuth flow, SQLite, and in-process worker model |
+| single VM or single host | good fit | keeps file-based auth and state intact |
+| Cloud Run | poor fit without refactor | stateless model conflicts with local token and SQLite files |
+| ECS/Fargate | poor fit without refactor | same file-state and worker-lifecycle mismatch |
 
-## 1) Local deployment (recommended for MVP)
+## Runtime Topology
 
-### Prerequisites
-- Python 3.11+
-- `credentials.json` (Google OAuth Desktop client)
-- `.env` with required settings
+```mermaid
+flowchart LR
+    Sender["External sender"] --> Gmail["Gmail API"]
+    Gmail --> App["FastAPI app and worker"]
+    App --> OpenAI["OpenAI API"]
+    App --> Drive["Google Drive API"]
+    App --> Docs["Google Docs API"]
+    App --> DB["state.db"]
+    App --> Token["token.json"]
+```
 
-### Steps
+## Files That Must Exist Or Persist
+
+| File | Purpose | Typical lifecycle |
+|---|---|---|
+| `.env` | runtime configuration | created once and edited as needed |
+| `credentials.json` | Google OAuth desktop client | provided by Google Cloud console |
+| `token.json` | Google access and refresh token | created by `make auth`, must persist |
+| `state.db` | runtime state | created on startup, must persist |
+| `SYSTEM_PROMPT.md` | agent instructions | persists and requires restart after changes |
+
+## Local Deployment
+
+Recommended for development and MVP evaluation.
 
 ```bash
-cd /Users/glitch/Projects/canna-mailroom
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 cp .env.example .env
-# fill OPENAI_API_KEY + AGENT_EMAIL
+# fill OPENAI_API_KEY and AGENT_EMAIL
 python scripts/auth_google.py
 uvicorn app.main:app --host 127.0.0.1 --port 8787
 ```
 
-### Validate
+Validate:
 
 ```bash
 curl http://127.0.0.1:8787/healthz
 ```
 
----
+## Single-Host Supervised Deployment
 
-## 2) Local production-style (systemd on Linux/macOS-equivalent supervisor)
+For a more stable always-on deployment, run on one host with a supervisor.
 
-Use this when you want auto-restart and boot-time startup.
-
-### Example systemd unit (Linux)
+### Example `systemd` unit
 
 ```ini
 [Unit]
@@ -54,7 +71,7 @@ After=network.target
 Type=simple
 WorkingDirectory=/opt/canna-mailroom
 EnvironmentFile=/opt/canna-mailroom/.env
-ExecStart=/opt/canna-mailroom/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8787
+ExecStart=/opt/canna-mailroom/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8787
 Restart=always
 RestartSec=5
 User=mailroom
@@ -63,119 +80,62 @@ User=mailroom
 WantedBy=multi-user.target
 ```
 
-### Enable
+Operational notes:
+- persist `.env`, `credentials.json`, `token.json`, and `state.db`
+- run exactly one instance for the mailbox
+- keep the HTTP port private or place it behind a reverse proxy
 
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable canna-mailroom
-sudo systemctl start canna-mailroom
-sudo systemctl status canna-mailroom
-```
+## GCP
 
----
+### Recommended: Compute Engine VM
 
-## 3) GCP deployment options
+This matches the current architecture with the least change.
 
-## Option A: Compute Engine VM (best fit for current OAuth + polling worker)
+Steps:
+1. create a Linux VM
+2. install Python 3.11+ and git
+3. clone the repo
+4. place `.env` and `credentials.json`
+5. run the OAuth flow once interactively to create `token.json`
+6. run the app under `systemd`
 
-This matches current architecture with minimal refactor.
+### Not Recommended Yet: Cloud Run
 
-### Steps
-1. Create Debian/Ubuntu VM.
-2. Install Python 3.11+, git.
-3. Clone repo and set up venv.
-4. Place `.env`, `credentials.json`.
-5. Run OAuth once interactively to produce `token.json`.
-6. Run with systemd (example above).
+Current blockers:
+- local token-file OAuth model
+- local SQLite state
+- in-process worker loop
 
-### Notes
-- Keep `token.json` and `credentials.json` on disk with strict permissions.
-- Use firewall rules to limit access to port 8787 (or keep private behind reverse proxy).
+To make Cloud Run fit, the app would need:
+- external persistent state
+- a different auth/token strategy
+- explicit worker separation or push-driven ingress
 
-## Option B: Cloud Run (requires adjustment)
+## AWS
 
-Cloud Run is stateless and not ideal for:
-- local token-file OAuth assumptions
-- in-process polling worker + SQLite file state
+### Recommended: EC2
 
-To use Cloud Run safely, you should first refactor to:
-- external state store (Cloud SQL)
-- non-local token/auth model (service-to-service or secure secret handling)
-- push/event architecture instead of long polling
+EC2 is the closest match to the current design. The same single-host guidance applies.
 
-For current code, **Compute Engine is the recommended GCP path**.
+### Not Recommended Yet: ECS Or Fargate
 
----
+Current blockers:
+- local file dependencies
+- in-process worker lifecycle
+- no distributed coordination
 
-## 4) AWS deployment options
+## Post-Deploy Checklist
 
-## Option A: EC2 (best fit for current implementation)
+- [ ] `/healthz` returns `ok=true`
+- [ ] `/healthz` returns `worker_alive=true`
+- [ ] a test email receives a reply
+- [ ] a second message in the same thread preserves context
+- [ ] `token.json` and `state.db` survive restart
+- [ ] only one active worker instance is pointed at the mailbox
 
-### Steps
-1. Launch Ubuntu EC2 instance.
-2. Install Python 3.11+, git.
-3. Clone repo and set up venv.
-4. Upload `.env` + `credentials.json`.
-5. Run OAuth once to create `token.json`.
-6. Run via systemd service.
+## Known Deployment Limits
 
-### Security group
-- Allow SSH from trusted IPs only.
-- Expose app port only if needed; prefer reverse proxy + TLS.
-
-## Option B: ECS/Fargate (requires adjustment)
-
-Current code assumes local files (`token.json`, `state.db`) and in-process worker lifecycle.
-For ECS/Fargate, first refactor to:
-- external DB (RDS)
-- managed secret/token strategy
-- explicit worker service model
-
-For today, **EC2 is the practical AWS path**.
-
----
-
-## 5) Required environment variables
-
-From `.env.example`:
-
-- `OPENAI_API_KEY`
-- `OPENAI_MODEL` (default `gpt-5.4`)
-- `AGENT_EMAIL`
-- `POLL_SECONDS`
-- `STATE_DB`
-- `GOOGLE_TOKEN_FILE`
-- `GOOGLE_CREDENTIALS_FILE`
-- `GOOGLE_DRIVE_DEFAULT_FOLDER_ID`
-- `SYSTEM_PROMPT_FILE`
-
----
-
-## 6) Deployment topology visual
-
-```mermaid
-flowchart LR
-    E[External Email Sender] --> GMAIL[Gmail API]
-    GMAIL --> APP[Canna Mailroom Runtime\nFastAPI + Worker]
-    APP --> OAI[OpenAI API]
-    APP --> DRIVE[Google Drive API]
-    APP --> DOCS[Google Docs API]
-    APP --> DB[(state.db)]
-```
-
----
-
-## 7) Post-deploy checklist
-
-- [ ] `/healthz` returns `ok=true` and `worker_alive=true`
-- [ ] test inbound email gets reply
-- [ ] second reply in same thread preserves context
-- [ ] service restarts cleanly after reboot
-- [ ] secrets are not committed and have restrictive file permissions
-
----
-
-## 8) Known deployment limitations
-
-Current code is optimized for single-instance operation.
-Avoid active-active multi-instance deployment against the same mailbox unless you add distributed locking and shared state.
+- single-instance only
+- local-file auth and state
+- no built-in TLS, reverse proxy, or service supervision
+- no horizontal scaling support

@@ -1,14 +1,23 @@
 # Data Model
 
-_Last verified against commit `7317103`._
+_Last verified against commit `b09c4f1`._
 
-This project has three persisted entities in SQLite (`app/state.py`) and several runtime payload shapes.
+SQLite is the only persisted store in the current implementation. The schema is created lazily by `StateStore._init_db()` in `app/state.py` at startup.
 
-## Persisted tables
+## Persisted Tables
+
+| Table | Primary key | Written by | Read by | Purpose |
+|---|---|---|---|---|
+| `thread_state` | `thread_id` | worker after successful reply | worker before model call | maps a Gmail thread to the latest OpenAI `response.id` |
+| `processed_messages` | `message_id` | worker on skip or completion | worker before processing | deduplicates inbound Gmail messages |
+| `dead_letters` | `message_id` | retry wrapper on terminal failure | dead-letter API and worker requeue path | records failed message runs and replay status |
+| `outbound_replies` | `message_id` | send idempotency guard | send idempotency guard | records whether a reply was already sent for an inbound message |
+
+## Table Details
 
 ### `thread_state`
 
-Purpose: map Gmail thread to latest OpenAI response pointer.
+Purpose: preserve conversation continuity per Gmail thread.
 
 Columns:
 - `thread_id TEXT PRIMARY KEY`
@@ -16,23 +25,29 @@ Columns:
 - `updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`
 
 Write behavior:
-- upsert on each successful outbound response (`set_last_response_id`)
+- upsert via `set_last_response_id(thread_id, response_id)` after a successful reply send path
+
+Read behavior:
+- `get_last_response_id(thread_id)` before `EmailAgent.respond_in_thread()`
 
 ### `processed_messages`
 
-Purpose: dedupe already-handled Gmail message IDs.
+Purpose: prevent the same inbound Gmail message from being processed twice.
 
 Columns:
 - `message_id TEXT PRIMARY KEY`
 - `processed_at DATETIME DEFAULT CURRENT_TIMESTAMP`
 
 Write behavior:
-- insert ignore during processing (`mark_processed`)
-- explicit delete on operator requeue (`unmark_processed`)
+- insert via `mark_processed(message_id)` when a message is skipped, completed, or dead-lettered
+- delete via `unmark_processed(message_id)` when an operator requeues a dead-letter item
+
+Read behavior:
+- `is_processed(message_id)` before worker processing
 
 ### `dead_letters`
 
-Purpose: persist failed message runs after retry exhaustion or non-transient failures.
+Purpose: store message runs that exhausted retries or failed with a non-transient error.
 
 Columns:
 - `message_id TEXT PRIMARY KEY`
@@ -40,16 +55,38 @@ Columns:
 - `from_email TEXT`
 - `subject TEXT`
 - `error TEXT`
-- `attempts INTEGER`
-- `status TEXT` (`dead_letter` or `requeued`)
+- `attempts INTEGER DEFAULT 1`
+- `status TEXT DEFAULT 'dead_letter'`
 - `updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`
 
 Write behavior:
-- upsert on failure terminal path (`upsert_dead_letter`)
-- status update on operator requeue (`mark_dead_letter_requeued`)
-- delete on successful replay (`clear_dead_letter`)
+- upsert via `upsert_dead_letter(...)` on terminal failure
+- update to `requeued` via `mark_dead_letter_requeued(message_id)` when an operator retries a message
+- delete via `clear_dead_letter(message_id)` after successful replay
 
-## ER diagram
+### `outbound_replies`
+
+Purpose: reduce duplicate replies when retries or partial failures occur around the send path.
+
+Columns:
+- `message_id TEXT PRIMARY KEY`
+- `sent_message_id TEXT`
+- `status TEXT DEFAULT 'sent'`
+- `source TEXT`
+- `updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`
+
+Write behavior:
+- upsert via `mark_reply_sent(message_id, sent_message_id, source)` after detecting or sending a reply
+
+Read behavior:
+- `has_reply_been_sent(message_id)` before attempting a send
+
+Notes:
+- `source` records whether the worker confirmed the reply through the Gmail API send path (`api_send`) or by scanning the thread for an existing reply (`thread_scan`)
+
+## Conceptual Relationships
+
+SQLite does not enforce foreign keys here. The relationships below are conceptual relationships used by the worker logic.
 
 ```mermaid
 erDiagram
@@ -74,50 +111,72 @@ erDiagram
         TEXT status
         DATETIME updated_at
     }
+
+    OUTBOUND_REPLIES {
+        TEXT message_id PK
+        TEXT sent_message_id
+        TEXT status
+        TEXT source
+        DATETIME updated_at
+    }
+
+    THREAD_STATE ||--o{ DEAD_LETTERS : "same thread_id"
+    PROCESSED_MESSAGES ||--o| DEAD_LETTERS : "same message_id"
+    PROCESSED_MESSAGES ||--o| OUTBOUND_REPLIES : "same message_id"
 ```
 
-## Runtime payload shapes (non-persisted)
-
-### Gmail inbound (subset used)
-Source: Gmail API `users.messages.get(..., format="full")` in `app/gmail_worker.py`
-
-Fields read:
-- `id`
-- `threadId`
-- `payload.headers[]` (`from`, `subject`, `message-id`)
-- `payload.body.data` or `payload.parts[].body.data`
-
-### AI request payload
-Source: `EmailAgent.respond_in_thread` in `app/ai_agent.py`
-
-- system prompt text from file
-- user content + prefixed email metadata
-- optional `previous_response_id`
-- tool schema list
-
-### AI tool output payload
-Function-call output envelope:
-- `type: function_call_output`
-- `call_id`
-- `output` (JSON string)
-
-## State transition for persisted records
+## Persistence Checkpoints
 
 ```mermaid
-stateDiagram-v2
-    [*] --> UnseenMessage
-    UnseenMessage --> ProcessedMessage: mark_processed(message_id)
-
-    [*] --> NoThreadPointer
-    NoThreadPointer --> ThreadPointerSet: set_last_response_id(thread_id,response_id)
-    ThreadPointerSet --> ThreadPointerSet: upsert on each turn
+flowchart LR
+    Inbound["Inbound Gmail message"] --> Processed["processed_messages"]
+    Inbound --> Dead["dead_letters"]
+    Inbound --> Outbound["outbound_replies"]
+    Thread["Gmail thread"] --> ThreadState["thread_state"]
+    Operator["requeue endpoint"] --> Dead
+    Operator --> Processed
 ```
 
-## Migration/versioning notes
+## Runtime Payload Shapes
+
+### Gmail message payload subset
+
+Read by `app/gmail_worker.py` from `users.messages.get(..., format="full")`:
+
+- `id`
+- `threadId`
+- `payload.headers[]`
+- `payload.body.data`
+- `payload.parts[].body.data`
+
+Headers currently consumed:
+- `from`
+- `subject`
+- `message-id`
+
+### AI request payload
+
+Built in `EmailAgent.respond_in_thread()`:
+
+- system prompt text loaded from `SYSTEM_PROMPT.md`
+- user content with an `EMAIL CONTEXT` prefix containing `From`, `Subject`, and `Thread-ID`
+- optional `previous_response_id`
+- tool specification list
+
+### AI tool output payload
+
+Built in the tool loop in `app/ai_agent.py`:
+
+- `type: function_call_output`
+- `call_id`
+- `output` as a JSON string
+
+## Versioning And Migration Notes
 
 - No migration framework exists yet.
-- Schema is created lazily by `StateStore._init_db()` at runtime.
-- Backward compatibility strategy is currently “single-version local MVP.”
+- The application relies on `CREATE TABLE IF NOT EXISTS` during startup.
+- The current compatibility model is effectively single-version local deployment.
+- Existing databases are forward-filled with newly added tables on startup, as long as schema additions are additive.
 
 Recommended next step:
-- introduce migration tool (e.g., Alembic/sqlite migration scripts) before schema growth.
+- introduce explicit schema migrations before adding non-additive changes
