@@ -1,6 +1,6 @@
 # Data Model
 
-_Last verified against commit `b09c4f1`._
+_Last verified against commit `b6c46e6`._
 
 SQLite is the only persisted store in the current implementation. The schema is created lazily by `StateStore._init_db()` in `app/state.py` at startup.
 
@@ -8,16 +8,17 @@ SQLite is the only persisted store in the current implementation. The schema is 
 
 | Table | Primary key | Written by | Read by | Purpose |
 |---|---|---|---|---|
-| `thread_state` | `thread_id` | worker after successful reply | worker before model call | maps a Gmail thread to the latest OpenAI `response.id` |
-| `processed_messages` | `message_id` | worker on skip or completion | worker before processing | deduplicates inbound Gmail messages |
-| `dead_letters` | `message_id` | retry wrapper on terminal failure | dead-letter API and worker requeue path | records failed message runs and replay status |
+| `thread_state` | `thread_id` | worker after successful reply | worker before model call | maps an email thread to the latest OpenAI `response.id` |
+| `processed_messages` | `message_id` | worker on skip, success, or dead-letter | worker before processing | deduplicates inbound messages |
+| `dead_letters` | `message_id` | retry wrapper on terminal failure | dead-letter API and replay path | records failed message runs and replay status |
 | `outbound_replies` | `message_id` | send idempotency guard | send idempotency guard | records whether a reply was already sent for an inbound message |
+| `inbound_messages` | `message_id` | worker before or during processing | worker retry and replay path | stores a normalized inbound message snapshot, including body text |
 
 ## Table Details
 
 ### `thread_state`
 
-Purpose: preserve conversation continuity per Gmail thread.
+Purpose: preserve conversation continuity per thread.
 
 Columns:
 - `thread_id TEXT PRIMARY KEY`
@@ -32,7 +33,7 @@ Read behavior:
 
 ### `processed_messages`
 
-Purpose: prevent the same inbound Gmail message from being processed twice.
+Purpose: prevent the same inbound message from being processed twice.
 
 Columns:
 - `message_id TEXT PRIMARY KEY`
@@ -82,7 +83,31 @@ Read behavior:
 - `has_reply_been_sent(message_id)` before attempting a send
 
 Notes:
-- `source` records whether the worker confirmed the reply through the Gmail API send path (`api_send`) or by scanning the thread for an existing reply (`thread_scan`)
+- `source` records whether the worker confirmed the reply through the direct send path (`api_send`) or by scanning the thread (`thread_scan`)
+
+### `inbound_messages`
+
+Purpose: keep a normalized inbound snapshot available for retries, requeues, and hook-driven processing.
+
+Columns:
+- `message_id TEXT PRIMARY KEY`
+- `thread_id TEXT NOT NULL`
+- `from_header TEXT NOT NULL`
+- `subject TEXT NOT NULL`
+- `message_id_header TEXT`
+- `body_text TEXT NOT NULL`
+- `updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`
+
+Write behavior:
+- upsert via `upsert_inbound_message(message)` when a message is loaded from Gmail API or delivered through `/hooks/gmail`
+
+Read behavior:
+- `get_inbound_message(message_id)` when the provider cannot refetch the original message during retries or replay
+
+Lifecycle notes:
+- successful runs delete the snapshot
+- self-message and empty-body skips delete the snapshot
+- terminal failures can leave the snapshot in place until replay or manual cleanup
 
 ## Conceptual Relationships
 
@@ -120,39 +145,49 @@ erDiagram
         DATETIME updated_at
     }
 
+    INBOUND_MESSAGES {
+        TEXT message_id PK
+        TEXT thread_id
+        TEXT from_header
+        TEXT subject
+        TEXT message_id_header
+        TEXT body_text
+        DATETIME updated_at
+    }
+
     THREAD_STATE ||--o{ DEAD_LETTERS : "same thread_id"
+    THREAD_STATE ||--o{ INBOUND_MESSAGES : "same thread_id"
     PROCESSED_MESSAGES ||--o| DEAD_LETTERS : "same message_id"
     PROCESSED_MESSAGES ||--o| OUTBOUND_REPLIES : "same message_id"
+    PROCESSED_MESSAGES ||--o| INBOUND_MESSAGES : "same message_id lifecycle"
+    INBOUND_MESSAGES ||--o| DEAD_LETTERS : "same message_id"
 ```
 
 ## Persistence Checkpoints
 
 ```mermaid
 flowchart LR
-    Inbound["Inbound Gmail message"] --> Processed["processed_messages"]
+    Inbound["Inbound message"] --> Snapshot["inbound_messages"]
+    Inbound --> Processed["processed_messages"]
     Inbound --> Dead["dead_letters"]
     Inbound --> Outbound["outbound_replies"]
-    Thread["Gmail thread"] --> ThreadState["thread_state"]
+    Thread["Email thread"] --> ThreadState["thread_state"]
     Operator["requeue endpoint"] --> Dead
     Operator --> Processed
 ```
 
 ## Runtime Payload Shapes
 
-### Gmail message payload subset
+### Normalized inbound message
 
-Read by `app/gmail_worker.py` from `users.messages.get(..., format="full")`:
+Used by `app/mailbox.py` and `app/gmail_worker.py`:
 
-- `id`
-- `threadId`
-- `payload.headers[]`
-- `payload.body.data`
-- `payload.parts[].body.data`
-
-Headers currently consumed:
-- `from`
+- `message_id`
+- `thread_id`
+- `from_header`
 - `subject`
-- `message-id`
+- `message_id_header`
+- `body_text`
 
 ### AI request payload
 
@@ -175,8 +210,5 @@ Built in the tool loop in `app/ai_agent.py`:
 
 - No migration framework exists yet.
 - The application relies on `CREATE TABLE IF NOT EXISTS` during startup.
-- The current compatibility model is effectively single-version local deployment.
+- The compatibility model is effectively single-version local deployment.
 - Existing databases are forward-filled with newly added tables on startup, as long as schema additions are additive.
-
-Recommended next step:
-- introduce explicit schema migrations before adding non-additive changes

@@ -10,14 +10,20 @@ from app.tools import GoogleWorkspaceTools
 
 
 class EmailAgent:
-    def __init__(self, api_key: str, model: str, tools: GoogleWorkspaceTools, system_prompt_path: str):
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        tools: GoogleWorkspaceTools | None,
+        system_prompt_path: str,
+    ):
         self.client = OpenAI(api_key=api_key)
         self.model = model
         self.tools = tools
         self.system_prompt = Path(system_prompt_path).read_text()
 
     def _tool_specs(self) -> list[dict[str, Any]]:
-        return [
+        specs = [
             {
                 "type": "function",
                 "name": "research_web",
@@ -30,58 +36,66 @@ class EmailAgent:
                     "required": ["query"],
                 },
             },
-            {
-                "type": "function",
-                "name": "list_drive_files",
-                "description": "List files in Google Drive folder",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "folder_id": {"type": "string"},
-                        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "name": "create_google_doc",
-                "description": "Create a Google Doc in a folder with optional initial content",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "title": {"type": "string"},
-                        "initial_content": {"type": "string"},
-                        "folder_id": {"type": "string"},
-                    },
-                    "required": ["title"],
-                },
-            },
-            {
-                "type": "function",
-                "name": "append_google_doc",
-                "description": "Append content to an existing Google Doc",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "doc_id": {"type": "string"},
-                        "content": {"type": "string"},
-                    },
-                    "required": ["doc_id", "content"],
-                },
-            },
-            {
-                "type": "function",
-                "name": "read_google_doc",
-                "description": "Read text content from an existing Google Doc",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "doc_id": {"type": "string"},
-                    },
-                    "required": ["doc_id"],
-                },
-            },
         ]
+        if not self.tools:
+            return specs
+
+        specs.extend(
+            [
+                {
+                    "type": "function",
+                    "name": "list_drive_files",
+                    "description": "List files in Google Drive folder",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "folder_id": {"type": "string"},
+                            "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "create_google_doc",
+                    "description": "Create a Google Doc in a folder with optional initial content",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "initial_content": {"type": "string"},
+                            "folder_id": {"type": "string"},
+                        },
+                        "required": ["title"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "append_google_doc",
+                    "description": "Append content to an existing Google Doc",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "doc_id": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["doc_id", "content"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "read_google_doc",
+                    "description": "Read text content from an existing Google Doc",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "doc_id": {"type": "string"},
+                        },
+                        "required": ["doc_id"],
+                    },
+                },
+            ]
+        )
+        return specs
 
     def _research_web(self, query: str) -> dict[str, Any]:
         response = self.client.responses.create(
@@ -97,6 +111,8 @@ class EmailAgent:
     def _run_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         if name == "research_web":
             return self._research_web(**args)
+        if not self.tools:
+            return {"error": f"Tool unavailable in this runtime: {name}"}
         if name == "list_drive_files":
             return self.tools.list_drive_files(**args)
         if name == "create_google_doc":

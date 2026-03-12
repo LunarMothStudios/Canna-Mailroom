@@ -2,6 +2,8 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
+from app.mailbox import MailboxMessage
+
 
 class StateStore:
     def __init__(self, db_path: str):
@@ -52,6 +54,19 @@ class StateStore:
                     sent_message_id TEXT,
                     status TEXT DEFAULT 'sent',
                     source TEXT,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS inbound_messages (
+                    message_id TEXT PRIMARY KEY,
+                    thread_id TEXT NOT NULL,
+                    from_header TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    message_id_header TEXT,
+                    body_text TEXT NOT NULL,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
                 """
@@ -108,6 +123,56 @@ class StateStore:
                 """,
                 (message_id, sent_message_id, source),
             )
+
+    def upsert_inbound_message(self, message: MailboxMessage):
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO inbound_messages (
+                    message_id, thread_id, from_header, subject, message_id_header, body_text
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(message_id) DO UPDATE SET
+                  thread_id = excluded.thread_id,
+                  from_header = excluded.from_header,
+                  subject = excluded.subject,
+                  message_id_header = excluded.message_id_header,
+                  body_text = excluded.body_text,
+                  updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    message.message_id,
+                    message.thread_id,
+                    message.from_header,
+                    message.subject,
+                    message.message_id_header,
+                    message.body_text,
+                ),
+            )
+
+    def get_inbound_message(self, message_id: str) -> MailboxMessage | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT message_id, thread_id, from_header, subject, message_id_header, body_text
+                FROM inbound_messages
+                WHERE message_id = ?
+                """,
+                (message_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return MailboxMessage(
+            message_id=row[0],
+            thread_id=row[1],
+            from_header=row[2],
+            subject=row[3],
+            message_id_header=row[4],
+            body_text=row[5],
+        )
+
+    def delete_inbound_message(self, message_id: str):
+        with self._conn() as conn:
+            conn.execute("DELETE FROM inbound_messages WHERE message_id = ?", (message_id,))
 
     def has_reply_been_sent(self, message_id: str) -> bool:
         with self._conn() as conn:

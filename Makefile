@@ -1,11 +1,23 @@
-.PHONY: setup auth run
+PYTHON ?= python3.11
+
+.PHONY: setup wizard connections auth doctor run
 
 setup:
-	python3 -m venv .venv
+	$(PYTHON) -m venv .venv
+	. .venv/bin/activate && python -m pip install --upgrade pip setuptools wheel
 	. .venv/bin/activate && pip install -e .
 
+wizard:
+	. .venv/bin/activate && mailroom setup
+
+connections:
+	. .venv/bin/activate && mailroom connections
+
 auth:
-	. .venv/bin/activate && python scripts/auth_google.py
+	. .venv/bin/activate && mailroom auth
+
+doctor:
+	. .venv/bin/activate && mailroom doctor
 
 run:
-	. .venv/bin/activate && uvicorn app.main:app --reload --port 8787
+	. .venv/bin/activate && mailroom run --reload

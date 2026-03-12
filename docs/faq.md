@@ -1,45 +1,55 @@
 # FAQ
 
-_Last verified against commit `b09c4f1`._
+_Last verified against commit `b6c46e6`._
 
 ## For Stakeholders
 
 ### What problem does this project solve?
 
-It demonstrates an email-native AI agent that can hold a threaded conversation over Gmail and use a small set of productivity tools without requiring a separate chat UI.
+It demonstrates an email-native AI agent that can hold a threaded conversation over email and reply from a dedicated mailbox without requiring a separate chat UI.
 
 ### What is the main value of this architecture?
 
-It is simple to stand up. A single process can monitor one mailbox, preserve per-thread context, and send useful replies with minimal infrastructure.
+It keeps the agent as the main primitive. Email is just the harness around it, so the same core worker and agent can sit behind different mailbox transports.
 
 ### Is it production-ready?
 
-Not yet. It is an MVP with real retry and dead-letter handling, but it lacks approval gates, sender policy controls, and a full automated test suite.
+Not yet. It has real retries, dead-letter handling, and two ingress modes, but it still lacks approval gates, sender policy controls, and automated behavioral tests.
 
 ### What are the biggest current boundaries?
 
 - one mailbox
 - one active runtime instance
-- broad Google OAuth scopes
 - no manual approval before outbound send
+- Drive and Docs only in `google_api` mode
 
 ## For Operators
 
-### Does it check email continuously?
+### Do I need everything we discussed just to see one reply work?
 
-Yes. The worker loops forever and sleeps for `POLL_SECONDS` between cycles. The default is `20`.
+No. The smallest path is `MAIL_PROVIDER=google_api`, one dedicated mailbox, one-time Google auth, then `mailroom run`.
 
-### How does it keep conversation context?
+### Why does setup feel large?
 
-It stores the latest OpenAI `response.id` per Gmail `threadId` in the `thread_state` table and passes that value back as `previous_response_id` on the next turn.
+Because there are really three separate concerns:
+- basic local mailbox testing
+- server-style hook ingress
+- future product onboarding for user-owned inboxes
 
-### Does it read all of Gmail?
+The repo supports pieces of all three, but you usually need only one path at a time.
 
-The OAuth scope allows broad Gmail access, but the worker query only asks Gmail for `is:unread -from:me`, then processes the returned messages one by one.
+### What is the difference between `google_api` and `gog`?
 
-### Can it send mail to arbitrary recipients?
+- `google_api` polls Gmail directly and also enables Drive and Docs tools.
+- `gog` uses `gog` for Gmail watch and send, receives messages through `/hooks/gmail`, and is email-only plus `research_web`.
 
-No arbitrary recipient is chosen by the model. The application replies to the sender of the inbound email in the same Gmail thread. There is still no allowlist, so any sender who reaches the mailbox could receive a reply.
+### Why does `gog` still ask for GCP topic information?
+
+Because the current `gog` path uses Gmail watch plus Pub/Sub. End users do not need their own Google Cloud setup, but the deployment still needs one GCP project and topic for the watcher.
+
+### Does `/process-now` always work?
+
+No. It is only supported in `google_api` polling mode. In `gog` mode, use real Gmail hook delivery or test `/hooks/gmail` directly.
 
 ### What happens if I delete `state.db`?
 
@@ -48,45 +58,34 @@ You lose:
 - processed-message dedupe history
 - dead-letter records
 - outbound send-tracking metadata
+- cached inbound message snapshots
 
-The app can recreate the schema, but it starts from a cold state.
-
-### What happens if `token.json` expires?
-
-The Google client refreshes automatically when a refresh token is available. If refresh fails, delete `token.json` and rerun `make auth`.
-
-### Why would an email be skipped?
-
-The worker skips messages that are:
-- already in `processed_messages`
-- sent by the agent itself
-- empty after plain-text extraction and reply-cleaning
-
-### Why might `/process-now` return `0` even when mail exists?
-
-Because the candidate messages may all have been skipped, already processed, or dead-lettered during the cycle.
+The app can recreate the schema, but it starts cold.
 
 ### Can I replay a failed message?
 
-Yes. Use `POST /dead-letter/requeue/{message_id}` and choose whether to process it immediately with `process_now=true` or wait for the next normal poll.
+Yes. Use `POST /dead-letter/requeue/{message_id}`. In `gog` mode, replay depends on a cached `inbound_messages` snapshot because that provider does not refetch by ID.
 
 ## For Developers
 
 ### Does the model have direct Gmail access?
 
-No. Gmail read and send logic lives only in `app/gmail_worker.py`. The model can call only the hardcoded tools exposed in `EmailAgent._tool_specs()`.
+No. Gmail transport stays application-owned. The model only sees normalized email text and can call the application-defined tool list.
 
 ### What tools are exposed to the model?
 
+Always:
 - `research_web`
+
+Only in `google_api` mode:
 - `list_drive_files`
 - `create_google_doc`
 - `append_google_doc`
 - `read_google_doc`
 
-### How many tool rounds can happen in one reply?
+### Why is there an `inbound_messages` table now?
 
-The tool loop is capped at `6` rounds inside `EmailAgent.respond_in_thread()`.
+It keeps a normalized inbound snapshot available for retries, hook processing, and requeue. That is especially important in `gog` mode, where the provider does not refetch by message ID.
 
 ### Does the app parse HTML-heavy emails or attachments?
 

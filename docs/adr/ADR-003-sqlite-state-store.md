@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-03-11
-- Last verified against commit `b09c4f1`
+- Last verified against commit `b6c46e6`
 
 ## Context
 

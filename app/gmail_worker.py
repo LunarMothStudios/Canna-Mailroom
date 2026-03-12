@@ -1,38 +1,15 @@
 from __future__ import annotations
 
-import base64
 import email
-from email.mime.text import MIMEText
 import random
 import re
 import time
-from typing import Any
 
 from googleapiclient.errors import HttpError
 
 from app.ai_agent import EmailAgent
+from app.mailbox import DeadLetterContext, MailboxMessage, MailboxProvider
 from app.state import StateStore
-
-
-def _decode_b64url(data: str) -> bytes:
-    padding = '=' * (-len(data) % 4)
-    return base64.urlsafe_b64decode(data + padding)
-
-
-def extract_plain_text(payload: dict[str, Any]) -> str:
-    mime_type = payload.get("mimeType", "")
-
-    if mime_type == "text/plain" and payload.get("body", {}).get("data"):
-        return _decode_b64url(payload["body"]["data"]).decode("utf-8", errors="ignore")
-
-    for part in payload.get("parts", []) or []:
-        if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
-            return _decode_b64url(part["body"]["data"]).decode("utf-8", errors="ignore")
-
-    if payload.get("body", {}).get("data"):
-        return _decode_b64url(payload["body"]["data"]).decode("utf-8", errors="ignore")
-
-    return ""
 
 
 def clean_reply_text(text: str) -> str:
@@ -42,10 +19,10 @@ def clean_reply_text(text: str) -> str:
     return text.strip()
 
 
-class GmailThreadWorker:
+class EmailThreadWorker:
     def __init__(
         self,
-        gmail_service,
+        mailbox: MailboxProvider,
         agent_email: str,
         state: StateStore,
         agent: EmailAgent,
@@ -54,7 +31,7 @@ class GmailThreadWorker:
         retry_max_delay_ms: int = 8000,
         retry_jitter_ms: int = 250,
     ):
-        self.gmail = gmail_service
+        self.mailbox = mailbox
         self.agent_email = agent_email.lower().strip()
         self.state = state
         self.agent = agent
@@ -63,71 +40,6 @@ class GmailThreadWorker:
         self.retry_base_delay_ms = max(1, retry_base_delay_ms)
         self.retry_max_delay_ms = max(self.retry_base_delay_ms, retry_max_delay_ms)
         self.retry_jitter_ms = max(0, retry_jitter_ms)
-
-    def _message_headers(self, headers: list[dict[str, str]]) -> dict[str, str]:
-        out = {}
-        for h in headers:
-            out[h.get("name", "").lower()] = h.get("value", "")
-        return out
-
-    def _send_reply(
-        self,
-        to_email: str,
-        subject: str,
-        body: str,
-        thread_id: str,
-        in_reply_to: str | None,
-    ) -> str | None:
-        msg = MIMEText(body)
-        msg["to"] = to_email
-        msg["from"] = self.agent_email
-        msg["subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
-        if in_reply_to:
-            msg["In-Reply-To"] = in_reply_to
-            msg["References"] = in_reply_to
-
-        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-        resp = (
-            self.gmail.users()
-            .messages()
-            .send(
-                userId="me",
-                body={"raw": raw, "threadId": thread_id},
-            )
-            .execute()
-        )
-        return resp.get("id")
-
-    def _find_existing_sent_reply(self, thread_id: str | None, in_reply_to: str | None) -> str | None:
-        if not thread_id or not in_reply_to:
-            return None
-
-        try:
-            thread = (
-                self.gmail.users()
-                .threads()
-                .get(
-                    userId="me",
-                    id=thread_id,
-                    format="metadata",
-                    metadataHeaders=["From", "In-Reply-To"],
-                )
-                .execute()
-            )
-        except Exception:
-            return None
-
-        target = in_reply_to.strip()
-        for message in thread.get("messages", []):
-            payload = message.get("payload", {})
-            headers = self._message_headers(payload.get("headers", []))
-            from_header = headers.get("from", "").lower()
-            in_reply_header = headers.get("in-reply-to", "").strip()
-
-            if self.agent_email in from_header and in_reply_header == target:
-                return message.get("id")
-
-        return None
 
     def _is_transient_error(self, err: Exception) -> bool:
         if isinstance(err, HttpError):
@@ -148,28 +60,18 @@ class GmailThreadWorker:
         jitter_ms = random.randint(0, self.retry_jitter_ms) if self.retry_jitter_ms > 0 else 0
         return (capped_ms + jitter_ms) / 1000.0
 
-    def _capture_dead_letter_context(self, message_id: str) -> dict[str, str | None]:
+    def _capture_dead_letter_context(self, message_id: str) -> DeadLetterContext:
         try:
-            meta = (
-                self.gmail.users()
-                .messages()
-                .get(
-                    userId="me",
-                    id=message_id,
-                    format="metadata",
-                    metadataHeaders=["From", "Subject"],
-                )
-                .execute()
-            )
-            payload = meta.get("payload", {})
-            headers = self._message_headers(payload.get("headers", []))
-            return {
-                "thread_id": meta.get("threadId"),
-                "from_email": headers.get("from"),
-                "subject": headers.get("subject"),
-            }
+            return self.mailbox.get_dead_letter_context(message_id)
         except Exception:
-            return {"thread_id": None, "from_email": None, "subject": None}
+            cached = self.state.get_inbound_message(message_id)
+            if not cached:
+                return DeadLetterContext()
+            return DeadLetterContext(
+                thread_id=cached.thread_id,
+                from_email=cached.from_header,
+                subject=cached.subject,
+            )
 
     def _send_with_idempotency_guard(
         self,
@@ -183,42 +85,52 @@ class GmailThreadWorker:
         if self.state.has_reply_been_sent(msg_id):
             return
 
-        existing_sent_id = self._find_existing_sent_reply(thread_id=thread_id, in_reply_to=in_reply_to)
+        existing_sent_id = self.mailbox.find_existing_reply(
+            thread_id=thread_id,
+            from_email=self.agent_email,
+            in_reply_to=in_reply_to,
+        )
         if existing_sent_id:
             self.state.mark_reply_sent(msg_id, sent_message_id=existing_sent_id, source="thread_scan")
             return
 
-        sent_message_id = self._send_reply(
+        sent_message_id = self.mailbox.send_reply(
             to_email=to_email,
             subject=subject,
             body=body,
             thread_id=thread_id,
             in_reply_to=in_reply_to,
+            from_email=self.agent_email,
         )
         self.state.mark_reply_sent(msg_id, sent_message_id=sent_message_id, source="api_send")
 
-    def _process_message_once(self, msg_id: str) -> bool:
-        full = (
-            self.gmail.users()
-            .messages()
-            .get(userId="me", id=msg_id, format="full")
-            .execute()
-        )
+    def _load_message(self, message_id: str) -> MailboxMessage:
+        try:
+            message = self.mailbox.get_message(message_id)
+            self.state.upsert_inbound_message(message)
+            return message
+        except Exception:
+            cached = self.state.get_inbound_message(message_id)
+            if cached:
+                return cached
+            raise
 
-        payload = full.get("payload", {})
-        headers = self._message_headers(payload.get("headers", []))
-        thread_id = full.get("threadId")
-        from_header = headers.get("from", "")
-        subject = headers.get("subject", "(no subject)")
-        message_id_header = headers.get("message-id")
+    def _process_loaded_message(self, message: MailboxMessage) -> bool:
+        msg_id = message.message_id
+        thread_id = message.thread_id
+        from_header = message.from_header
+        subject = message.subject
+        message_id_header = message.message_id_header
 
         if self.agent_email in from_header.lower():
             self.state.mark_processed(msg_id)
+            self.state.delete_inbound_message(msg_id)
             return False
 
-        text = clean_reply_text(extract_plain_text(payload))
+        text = clean_reply_text(message.body_text)
         if not text:
             self.state.mark_processed(msg_id)
+            self.state.delete_inbound_message(msg_id)
             return False
 
         last_resp_id = self.state.get_last_response_id(thread_id)
@@ -238,23 +150,24 @@ class GmailThreadWorker:
             in_reply_to=message_id_header,
         )
 
-        self.gmail.users().messages().modify(
-            userId="me",
-            id=msg_id,
-            body={"removeLabelIds": ["UNREAD"]},
-        ).execute()
+        self.mailbox.mark_read(msg_id)
 
         self.state.set_last_response_id(thread_id, new_resp_id)
         self.state.mark_processed(msg_id)
         self.state.clear_dead_letter(msg_id)
+        self.state.delete_inbound_message(msg_id)
         return True
 
-    def _process_message_with_retry(self, msg_id: str) -> bool:
+    def _process_message_with_retry(self, msg_id: str, message: MailboxMessage | None = None) -> bool:
         last_err: Exception | None = None
+        cached_message = message
+        if cached_message:
+            self.state.upsert_inbound_message(cached_message)
 
         for attempt in range(1, self.retry_max_attempts + 1):
             try:
-                return self._process_message_once(msg_id)
+                loaded_message = cached_message or self._load_message(msg_id)
+                return self._process_loaded_message(loaded_message)
             except Exception as err:
                 last_err = err
                 transient = self._is_transient_error(err)
@@ -274,9 +187,9 @@ class GmailThreadWorker:
                     message_id=msg_id,
                     error=f"{err.__class__.__name__}: {err}",
                     attempts=attempt,
-                    thread_id=context.get("thread_id"),
-                    from_email=context.get("from_email"),
-                    subject=context.get("subject"),
+                    thread_id=context.thread_id,
+                    from_email=context.from_email,
+                    subject=context.subject,
                     status="dead_letter",
                 )
                 self.state.mark_processed(msg_id)
@@ -293,9 +206,9 @@ class GmailThreadWorker:
                 message_id=msg_id,
                 error=f"{last_err.__class__.__name__}: {last_err}",
                 attempts=self.retry_max_attempts,
-                thread_id=context.get("thread_id"),
-                from_email=context.get("from_email"),
-                subject=context.get("subject"),
+                thread_id=context.thread_id,
+                from_email=context.from_email,
+                subject=context.subject,
                 status="dead_letter",
             )
             self.state.mark_processed(msg_id)
@@ -305,6 +218,11 @@ class GmailThreadWorker:
         if self.state.is_processed(message_id):
             return False
         return self._process_message_with_retry(message_id)
+
+    def process_mailbox_message(self, message: MailboxMessage) -> bool:
+        if self.state.is_processed(message.message_id):
+            return False
+        return self._process_message_with_retry(message.message_id, message=message)
 
     def requeue_dead_letter(self, message_id: str, process_immediately: bool = False) -> bool:
         self.state.mark_dead_letter_requeued(message_id)
@@ -316,20 +234,10 @@ class GmailThreadWorker:
         return True
 
     def process_once(self) -> int:
-        q = "is:unread -from:me"
         unread_ids: list[str] = []
 
         try:
-            unread_ids = [
-                m["id"]
-                for m in (
-                    self.gmail.users()
-                    .messages()
-                    .list(userId="me", q=q, maxResults=20)
-                    .execute()
-                    .get("messages", [])
-                )
-            ]
+            unread_ids = self.mailbox.list_unread_message_ids(limit=20)
         except Exception as err:
             print(f"Failed to list unread messages: {err.__class__.__name__}: {err}")
 
@@ -364,3 +272,6 @@ class GmailThreadWorker:
             except Exception as err:
                 print(f"Worker loop error: {err.__class__.__name__}: {err}")
             time.sleep(poll_seconds)
+
+
+GmailThreadWorker = EmailThreadWorker

@@ -1,33 +1,33 @@
 # Documentation Index
 
-_Last verified against commit `b09c4f1`._
+_Last verified against commit `b6c46e6`._
 
 ## Start Here By Audience
 
 | Audience | Read first | Why |
 |---|---|---|
-| Developer | [architecture.md](architecture.md), [runtime-and-pipeline.md](runtime-and-pipeline.md), [data-model.md](data-model.md) | Understand how the service starts, processes mail, stores state, and calls tools |
-| Operator | [README.md](../README.md), [cli-reference.md](cli-reference.md), [operations.md](operations.md), [security-and-safety.md](security-and-safety.md) | Bring up the system, monitor it, and recover from failures safely |
-| Stakeholder | [README.md](../README.md), [architecture.md](architecture.md), [faq.md](faq.md) | Understand value, current scope, and operational boundaries without reading code |
+| Developer | [architecture.md](architecture.md), [runtime-and-pipeline.md](runtime-and-pipeline.md), [data-model.md](data-model.md) | Understand provider selection, message flow, state, and tool boundaries |
+| Operator | [../README.md](../README.md), [cli-reference.md](cli-reference.md), [operations.md](operations.md), [security-and-safety.md](security-and-safety.md) | Bring up one mailbox, monitor it, and recover from failures safely |
+| Stakeholder | [../README.md](../README.md), [architecture.md](architecture.md), [faq.md](faq.md) | Understand value, current scope, and major constraints without reading code |
 
 ## Recommended Reading Order
 
 1. [architecture.md](architecture.md)
 2. [runtime-and-pipeline.md](runtime-and-pipeline.md)
 3. [data-model.md](data-model.md)
-4. [operations.md](operations.md)
-5. [security-and-safety.md](security-and-safety.md)
+4. [cli-reference.md](cli-reference.md)
+5. [operations.md](operations.md)
 
 ## Full Documentation Set
 
-- [architecture.md](architecture.md) — system shape, ownership boundaries, startup, and tool exposure
+- [architecture.md](architecture.md) — provider-aware system shape, startup, ownership boundaries, and tool exposure
 - [data-model.md](data-model.md) — SQLite tables, conceptual relationships, and persistence checkpoints
-- [runtime-and-pipeline.md](runtime-and-pipeline.md) — stage-by-stage mail processing, retries, and job lifecycle
-- [cli-reference.md](cli-reference.md) — Make targets, scripts, HTTP endpoints, recipes, and troubleshooting
+- [runtime-and-pipeline.md](runtime-and-pipeline.md) — polling and hook ingress flow, retries, and job lifecycle
+- [cli-reference.md](cli-reference.md) — `mailroom`, Make targets, HTTP endpoints, recipes, and troubleshooting
 - [operations.md](operations.md) — day-1 setup, day-2 runbook, incidents, and recovery
-- [deployment.md](deployment.md) — local and single-host deployment guidance plus cloud fit notes
-- [security-and-safety.md](security-and-safety.md) — secrets, scopes, data handling, approval model, and safe defaults
-- [testing-and-quality.md](testing-and-quality.md) — current quality bar, manual checks, CI behavior, and release checklist
+- [deployment.md](deployment.md) — local and single-host deployment guidance plus provider fit notes
+- [security-and-safety.md](security-and-safety.md) — secrets, auth material, data handling, and safety gaps
+- [testing-and-quality.md](testing-and-quality.md) — current quality bar, smoke checks, CI behavior, and release checklist
 - [faq.md](faq.md) — short answers for operators, developers, and stakeholders
 
 ## Architecture Decision Records
@@ -44,7 +44,12 @@ _Last verified against commit `b09c4f1`._
 | Code path | Primary docs |
 |---|---|
 | `app/main.py` | [architecture.md](architecture.md), [cli-reference.md](cli-reference.md), [operations.md](operations.md) |
-| `app/settings.py` | [README.md](../README.md), [cli-reference.md](cli-reference.md), [operations.md](operations.md) |
+| `app/cli.py` | [../README.md](../README.md), [cli-reference.md](cli-reference.md), [operations.md](operations.md) |
+| `app/settings.py` | [../README.md](../README.md), [cli-reference.md](cli-reference.md), [operations.md](operations.md) |
+| `app/mailbox.py` | [architecture.md](architecture.md), [runtime-and-pipeline.md](runtime-and-pipeline.md), [data-model.md](data-model.md) |
+| `app/google_mailbox.py` | [architecture.md](architecture.md), [runtime-and-pipeline.md](runtime-and-pipeline.md), [security-and-safety.md](security-and-safety.md) |
+| `app/gog_mailbox.py` | [architecture.md](architecture.md), [runtime-and-pipeline.md](runtime-and-pipeline.md), [operations.md](operations.md) |
+| `app/gog_watcher.py` | [architecture.md](architecture.md), [operations.md](operations.md), [deployment.md](deployment.md) |
 | `app/google_clients.py` | [architecture.md](architecture.md), [security-and-safety.md](security-and-safety.md), [deployment.md](deployment.md) |
 | `app/state.py` | [data-model.md](data-model.md), [runtime-and-pipeline.md](runtime-and-pipeline.md), [operations.md](operations.md) |
 | `app/ai_agent.py` | [architecture.md](architecture.md), [runtime-and-pipeline.md](runtime-and-pipeline.md), [security-and-safety.md](security-and-safety.md) |
