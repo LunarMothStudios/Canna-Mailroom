@@ -72,6 +72,7 @@ Response fields:
 - `agent_email`
 - `poll_seconds`
 - `worker_alive`
+- `retry` (max attempts + backoff settings)
 
 ### `POST /process-now`
 
@@ -80,6 +81,22 @@ curl -X POST http://127.0.0.1:8787/process-now
 ```
 
 Forces one immediate poll cycle; useful for debugging.
+
+### `GET /dead-letter`
+
+```bash
+curl http://127.0.0.1:8787/dead-letter
+```
+
+Returns recently dead-lettered message runs with error metadata.
+
+### `POST /dead-letter/requeue/{message_id}`
+
+```bash
+curl -X POST http://127.0.0.1:8787/dead-letter/requeue/<message_id>
+```
+
+Marks a dead-letter item as requeued and removes processed-message dedupe so it can be retried on next cycle.
 
 ## Practical operator recipes
 

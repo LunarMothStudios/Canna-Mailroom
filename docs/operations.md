@@ -28,6 +28,11 @@ make run
 ### Tuning
 
 - Change poll interval by editing `POLL_SECONDS` in `.env`.
+- Retry controls:
+  - `RETRY_MAX_ATTEMPTS`
+  - `RETRY_BASE_DELAY_MS`
+  - `RETRY_MAX_DELAY_MS`
+  - `RETRY_JITTER_MS`
 - Restart process after env changes.
 
 ## Monitoring and logging
@@ -65,6 +70,16 @@ Missing today (planned):
 1. Ensure only one runtime instance is active.
 2. Verify same mailbox isn’t processed by multiple hosts.
 3. Confirm `state.db` is persistent and writable.
+
+### Incident class D: dead-letter growth / exhausted retries
+
+1. Inspect dead-letter queue:
+   - `GET /dead-letter`
+2. Review repeated error classes (auth, rate limit, malformed message, etc.).
+3. Fix root cause.
+4. Requeue selected message when safe:
+   - `POST /dead-letter/requeue/{message_id}`
+5. Trigger a manual cycle (`POST /process-now`) to confirm recovery.
 
 ## Recovery / rollback
 

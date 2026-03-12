@@ -17,5 +17,10 @@ class Settings:
     google_drive_default_folder_id: str = os.getenv("GOOGLE_DRIVE_DEFAULT_FOLDER_ID", "")
     system_prompt_file: str = os.getenv("SYSTEM_PROMPT_FILE", "./SYSTEM_PROMPT.md")
 
+    retry_max_attempts: int = int(os.getenv("RETRY_MAX_ATTEMPTS", "3"))
+    retry_base_delay_ms: int = int(os.getenv("RETRY_BASE_DELAY_MS", "800"))
+    retry_max_delay_ms: int = int(os.getenv("RETRY_MAX_DELAY_MS", "8000"))
+    retry_jitter_ms: int = int(os.getenv("RETRY_JITTER_MS", "250"))
+
 
 settings = Settings()
