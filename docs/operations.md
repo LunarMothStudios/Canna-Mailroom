@@ -13,11 +13,12 @@ This runbook covers the system as implemented today: one process, one mailbox, o
 3. Activate the virtual environment: `source .venv/bin/activate`.
 4. Run `mailroom setup`.
 5. Choose `MAIL_PROVIDER=google_api`.
-6. Complete the local Google OAuth flow.
-7. Run `mailroom doctor`.
-8. Run `mailroom run --reload`.
-9. Check `curl http://127.0.0.1:8787/healthz`.
-10. Send a test email and reply in the same thread.
+6. Set `SENDER_POLICY_MODE=allowlist` if you want to restrict replies during testing.
+7. Complete the local Google OAuth flow.
+8. Run `mailroom doctor`.
+9. Run `mailroom run --reload`.
+10. Check `curl http://127.0.0.1:8787/healthz`.
+11. Send a test email and reply in the same thread.
 
 ### Server-style hook path: `gog`
 
@@ -51,6 +52,7 @@ Restart whenever you change:
 - `SYSTEM_PROMPT.md`
 - `credentials.json` or `token.json` in `google_api` mode
 - any `gog` watcher or token settings in `gog` mode
+- sender policy settings such as `SENDER_POLICY_MODE` or `ALLOWED_SENDERS`
 
 ### Tune
 
@@ -59,6 +61,8 @@ Environment variables that materially affect operations:
 | Setting | Default | Effect |
 |---|---|---|
 | `MAIL_PROVIDER` | `google_api` | selects polling or hook ingress |
+| `SENDER_POLICY_MODE` | `all` | reply to all senders or only an explicit allowlist |
+| `ALLOWED_SENDERS` | empty | comma-separated sender emails used when policy mode is `allowlist` |
 | `POLL_SECONDS` | `20` | delay between polling cycles in `google_api` mode |
 | `RETRY_MAX_ATTEMPTS` | `3` | max attempts per message |
 | `RETRY_BASE_DELAY_MS` | `800` | retry backoff starting point |
@@ -107,6 +111,7 @@ curl http://127.0.0.1:8787/healthz
 Look for:
 - `ok: true`
 - expected `mail_provider`
+- expected `sender_policy_mode`
 - expected `ingress_mode`
 - `worker_alive: true`
 - `watcher_alive: true` in `gog` mode

@@ -115,6 +115,23 @@ def prompt_mail_provider(default: str | None = None) -> str:
         print("Choose `google_api` or `gog`.")
 
 
+def normalize_sender_policy_mode(raw_value: str | None) -> str:
+    candidate = (raw_value or "").strip().lower()
+    if candidate in {"all", "allowlist"}:
+        return candidate
+    return candidate or "all"
+
+
+def prompt_sender_policy_mode(default: str | None = None) -> str:
+    while True:
+        mode = normalize_sender_policy_mode(
+            prompt("Sender policy mode (all or allowlist)", default=default or "all", required=True)
+        )
+        if mode in {"all", "allowlist"}:
+            return mode
+        print("Choose `all` or `allowlist`.")
+
+
 def prompt(
     label: str,
     *,
@@ -267,6 +284,22 @@ def complete_google_api_setup(env_values: dict[str, str]) -> int:
     print("For an end-to-end email test, send a message from a different mailbox to:")
     print(f"   {env_values['AGENT_EMAIL']}")
     return 0
+
+
+def configure_sender_policy(env_path: Path, env_values: dict[str, str]) -> dict[str, str]:
+    print_header("Mailroom Access")
+    print("Choose whether the agent replies to everyone or only to an explicit allowlist.")
+
+    env_values["SENDER_POLICY_MODE"] = prompt_sender_policy_mode(env_values.get("SENDER_POLICY_MODE"))
+    env_values["ALLOWED_SENDERS"] = prompt(
+        "Allowed sender emails (comma-separated, used only in allowlist mode)",
+        default=env_values.get("ALLOWED_SENDERS") or "",
+        required=env_values["SENDER_POLICY_MODE"] == "allowlist",
+    )
+
+    write_env_file(env_path, env_values)
+    print(f"Saved {env_path}")
+    return env_values
 
 
 def configure_gog_connection_env(env_path: Path, env_values: dict[str, str]) -> dict[str, str]:
@@ -481,11 +514,26 @@ def doctor_command(_: argparse.Namespace) -> int:
         (bool(env_values.get("OPENAI_API_KEY")), "OPENAI_API_KEY", "set in .env"),
         (bool(env_values.get("AGENT_EMAIL")), "AGENT_EMAIL", env_values.get("AGENT_EMAIL", "missing")),
         (mail_provider in {"google_api", "gog"}, "MAIL_PROVIDER", mail_provider),
+        (
+            normalize_sender_policy_mode(env_values.get("SENDER_POLICY_MODE")) in {"all", "allowlist"},
+            "SENDER_POLICY_MODE",
+            normalize_sender_policy_mode(env_values.get("SENDER_POLICY_MODE")),
+        ),
         (prompt_path.exists(), "system prompt", str(prompt_path)),
         (importlib.util.find_spec("openai") is not None, "python dependency", "openai installed"),
         (importlib.util.find_spec("fastapi") is not None, "python dependency", "fastapi installed"),
         (importlib.util.find_spec("uvicorn") is not None, "python dependency", "uvicorn installed"),
     ]
+
+    sender_policy_mode = normalize_sender_policy_mode(env_values.get("SENDER_POLICY_MODE"))
+    if sender_policy_mode == "allowlist":
+        checks.append(
+            (
+                bool(env_values.get("ALLOWED_SENDERS", "").strip()),
+                "ALLOWED_SENDERS",
+                env_values.get("ALLOWED_SENDERS", "missing"),
+            )
+        )
 
     if mail_provider == "google_api":
         checks.extend(
@@ -555,6 +603,25 @@ def auth_command(_: argparse.Namespace) -> int:
         print("Run `mailroom setup` to walk through the Google auth prerequisites.")
         return 1
     return run_google_auth()
+
+
+def access_command(_: argparse.Namespace) -> int:
+    env_path, env_values = ensure_env_file()
+
+    if not env_values.get("AGENT_EMAIL"):
+        print_header("Mailbox")
+        env_values["AGENT_EMAIL"] = prompt_email("Agent Gmail address", required=True)
+        write_env_file(env_path, env_values)
+        print(f"Saved {env_path}")
+
+    configure_sender_policy(env_path, env_values)
+
+    print_header("Access Updated")
+    print("Next commands:")
+    print("1. mailroom doctor")
+    print("2. restart the app if it is already running")
+    print("3. curl http://127.0.0.1:8787/healthz")
+    return 0
 
 
 def run_command(args: argparse.Namespace) -> int:
@@ -642,6 +709,7 @@ def setup_command(_: argparse.Namespace) -> int:
         default=env_values.get("AGENT_EMAIL") or None,
         required=True,
     )
+    configure_sender_policy(env_path, env_values)
     env_values["OPENAI_MODEL"] = prompt(
         "OpenAI model",
         default=env_values.get("OPENAI_MODEL") or "gpt-5.4",
@@ -705,6 +773,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     auth_parser = subparsers.add_parser("auth", help="run the Google OAuth browser flow")
     auth_parser.set_defaults(func=auth_command)
+
+    access_parser = subparsers.add_parser("access", help="interactive sender access policy wizard")
+    access_parser.set_defaults(func=access_command)
 
     run_parser = subparsers.add_parser("run", help="start the FastAPI app")
     run_parser.add_argument("--host", default="127.0.0.1")

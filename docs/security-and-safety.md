@@ -50,13 +50,14 @@ Current send decision path:
 Current safeguards before send:
 - self-message skip
 - empty-body skip
+- optional sender allowlist via `SENDER_POLICY_MODE=allowlist` plus `ALLOWED_SENDERS`
 - inbound dedupe via `processed_messages`
 - outbound dedupe via `outbound_replies`
 - best-effort thread scan in `google_api` mode
 
 Missing safeguards:
 - human review or approval
-- sender allowlist or denylist
+- denylist support
 - outbound content filtering
 - per-sender policy rules
 - rate limiting
@@ -135,6 +136,7 @@ flowchart TD
 ## Safe Defaults For Local Use
 
 - use a dedicated mailbox
+- prefer `SENDER_POLICY_MODE=allowlist` during early testing
 - keep `.env`, `state.db`, and prompt files out of git
 - keep `credentials.json` and `token.json` out of git in `google_api` mode
 - avoid sensitive or regulated inboxes
@@ -149,7 +151,7 @@ Additional `gog` safety notes:
 
 - broad Google OAuth scopes in `google_api` mode
 - no manual approval gate
-- no sender policy layer
+- sender policy is limited to a simple email allowlist
 - no encryption-at-rest beyond host defaults
 - no audit log beyond stdout and SQLite metadata
 - no DLP or PII redaction layer
@@ -157,9 +159,10 @@ Additional `gog` safety notes:
 
 ## Recommended Hardening Roadmap
 
-1. Add sender allowlist and denylist controls.
-2. Add an approval-required mode before outbound send.
-3. Add structured audit logs with message and thread IDs.
-4. Reduce Google scopes where practical.
-5. Add explicit cleanup policy for stale `inbound_messages`.
-6. Move secrets and token material into a managed secret strategy for server deployments.
+1. Expand the sender allowlist and add denylist controls.
+2. Add domain-level sender policy and better match rules.
+3. Add an approval-required mode before outbound send.
+4. Add structured audit logs with message and thread IDs.
+5. Reduce Google scopes where practical.
+6. Add explicit cleanup policy for stale `inbound_messages`.
+7. Move secrets and token material into a managed secret strategy for server deployments.

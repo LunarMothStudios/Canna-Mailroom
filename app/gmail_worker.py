@@ -4,6 +4,7 @@ import email
 import random
 import re
 import time
+from collections.abc import Iterable
 
 from googleapiclient.errors import HttpError
 
@@ -26,6 +27,8 @@ class EmailThreadWorker:
         agent_email: str,
         state: StateStore,
         agent: EmailAgent,
+        sender_policy_mode: str = "all",
+        allowed_senders: Iterable[str] = (),
         retry_max_attempts: int = 3,
         retry_base_delay_ms: int = 800,
         retry_max_delay_ms: int = 8000,
@@ -35,6 +38,8 @@ class EmailThreadWorker:
         self.agent_email = agent_email.lower().strip()
         self.state = state
         self.agent = agent
+        self.sender_policy_mode = sender_policy_mode if sender_policy_mode in {"all", "allowlist"} else "all"
+        self.allowed_senders = {item.strip().lower() for item in allowed_senders if item.strip()}
 
         self.retry_max_attempts = max(1, retry_max_attempts)
         self.retry_base_delay_ms = max(1, retry_base_delay_ms)
@@ -115,14 +120,34 @@ class EmailThreadWorker:
                 return cached
             raise
 
+    def _extract_sender_email(self, from_header: str) -> str:
+        parsed_email = email.utils.parseaddr(from_header)[1].strip().lower()
+        return parsed_email or from_header.strip().lower()
+
+    def _sender_allowed(self, sender_email: str) -> bool:
+        if self.sender_policy_mode == "all":
+            return True
+        return sender_email in self.allowed_senders
+
     def _process_loaded_message(self, message: MailboxMessage) -> bool:
         msg_id = message.message_id
         thread_id = message.thread_id
         from_header = message.from_header
         subject = message.subject
         message_id_header = message.message_id_header
+        sender_email = self._extract_sender_email(from_header)
 
-        if self.agent_email in from_header.lower():
+        if sender_email == self.agent_email:
+            self.state.mark_processed(msg_id)
+            self.state.delete_inbound_message(msg_id)
+            return False
+
+        if not self._sender_allowed(sender_email):
+            print(f"Skipping message {msg_id} from sender outside allowlist: {sender_email or from_header}")
+            try:
+                self.mailbox.mark_read(msg_id)
+            except Exception as err:
+                print(f"Failed to mark skipped message {msg_id} read: {err.__class__.__name__}: {err}")
             self.state.mark_processed(msg_id)
             self.state.delete_inbound_message(msg_id)
             return False
@@ -143,7 +168,7 @@ class EmailThreadWorker:
 
         self._send_with_idempotency_guard(
             msg_id=msg_id,
-            to_email=email.utils.parseaddr(from_header)[1] or from_header,
+            to_email=sender_email or from_header,
             subject=subject,
             body=reply,
             thread_id=thread_id,

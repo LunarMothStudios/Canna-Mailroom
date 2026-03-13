@@ -1,6 +1,6 @@
 PYTHON ?= python3.11
 
-.PHONY: setup wizard connections auth doctor run
+.PHONY: setup wizard connections access auth doctor run
 
 setup:
 	$(PYTHON) -m venv .venv
@@ -12,6 +12,9 @@ wizard:
 
 connections:
 	. .venv/bin/activate && mailroom connections
+
+access:
+	. .venv/bin/activate && mailroom access
 
 auth:
 	. .venv/bin/activate && mailroom auth

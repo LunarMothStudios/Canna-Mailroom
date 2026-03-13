@@ -14,7 +14,7 @@ It keeps the agent as the main primitive. Email is just the harness around it, s
 
 ### Is it production-ready?
 
-Not yet. It has real retries, dead-letter handling, and two ingress modes, but it still lacks approval gates, sender policy controls, and automated behavioral tests.
+Not yet. It has real retries, dead-letter handling, two ingress modes, and a simple sender allowlist, but it still lacks approval gates, richer policy controls, and automated behavioral tests.
 
 ### What are the biggest current boundaries?
 
@@ -46,6 +46,18 @@ The repo supports pieces of all three, but you usually need only one path at a t
 ### Why does `gog` still ask for GCP topic information?
 
 Because the current `gog` path uses Gmail watch plus Pub/Sub. End users do not need their own Google Cloud setup, but the deployment still needs one GCP project and topic for the watcher.
+
+### Can I stop it from replying to everyone?
+
+Yes. Set:
+- `SENDER_POLICY_MODE=allowlist`
+- `ALLOWED_SENDERS=person1@example.com,person2@example.com`
+
+Then restart the app. Only those senders will get replies.
+
+You can do this without editing `.env` directly:
+- `mailroom access`
+- or `make access`
 
 ### Does `/process-now` always work?
 

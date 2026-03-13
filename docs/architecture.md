@@ -140,5 +140,5 @@ No mode exposes Gmail read or send as model-callable tools. Email transport stay
 - multi-mailbox orchestration
 - horizontal worker coordination
 - HTML email rendering
-- sender policy enforcement
+- rich sender policy enforcement
 - automatic migration between mailbox providers

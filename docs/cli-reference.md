@@ -16,12 +16,14 @@ All runtime tuning happens through environment variables, not command flags.
 |---|---|---|
 | `mailroom setup` | `app/cli.py` | interactive setup wizard for `.env` plus provider-specific onboarding |
 | `mailroom connections` | `app/cli.py` | rerun only the mailbox connection flow for the current provider |
+| `mailroom access` | `app/cli.py` | interactive sender access policy wizard |
 | `mailroom doctor` | `app/cli.py` | local health check for config, provider prerequisites, and Python deps |
 | `mailroom auth` | `app/cli.py` | run the Google OAuth browser flow for `google_api` mode |
 | `mailroom run` | `app/cli.py` | start the FastAPI app directly |
 | `make setup` | `Makefile` | create `.venv` and install the package editable |
 | `make wizard` | `Makefile` | run `mailroom setup` inside `.venv` |
 | `make connections` | `Makefile` | run `mailroom connections` inside `.venv` |
+| `make access` | `Makefile` | run `mailroom access` inside `.venv` |
 | `make auth` | `Makefile` | run `mailroom auth` inside `.venv` |
 | `make doctor` | `Makefile` | run `mailroom doctor` inside `.venv` |
 | `make run` | `Makefile` | run `mailroom run --reload` inside `.venv` |
@@ -67,6 +69,14 @@ Reruns only the mailbox connection flow.
 make connections
 ```
 
+### `make access`
+
+Runs the sender access wizard.
+
+```bash
+make access
+```
+
 ### `make auth`
 
 Runs the Google OAuth browser flow. This is only relevant in `google_api` mode.
@@ -101,7 +111,7 @@ Notes:
 
 Interactive wizard that:
 - creates `.env` from `.env.example` when needed
-- prompts for `OPENAI_API_KEY`, `MAIL_PROVIDER`, `AGENT_EMAIL`, model, and core runtime settings
+- prompts for `OPENAI_API_KEY`, `MAIL_PROVIDER`, `AGENT_EMAIL`, sender policy, model, and core runtime settings
 - hands off to the provider-specific connection flow
 - prints the next commands to run
 
@@ -133,6 +143,20 @@ source .venv/bin/activate
 mailroom connections
 ```
 
+### `mailroom access`
+
+Reruns just the sender access policy flow using the current `.env`.
+
+Use this when:
+- you want to switch between `all` and `allowlist`
+- you want to update the approved sender list
+- you want to lock down the mailbox after an overly broad test
+
+```bash
+source .venv/bin/activate
+mailroom access
+```
+
 ### `mailroom doctor`
 
 Checks:
@@ -148,6 +172,10 @@ Provider-specific checks:
 |---|---|
 | `google_api` | `credentials.json`, `token.json`, OAuth client structure |
 | `gog` | `GOG_GMAIL_TOPIC`, `GOG_GMAIL_SUBSCRIPTION`, `GOG_GMAIL_PUSH_ENDPOINT`, hook tokens, `gog` on `PATH` |
+
+Sender policy checks:
+- `SENDER_POLICY_MODE` must be `all` or `allowlist`
+- if `SENDER_POLICY_MODE=allowlist`, `ALLOWED_SENDERS` must be non-empty
 
 ```bash
 source .venv/bin/activate
@@ -197,6 +225,8 @@ Response fields:
 - `ok`
 - `agent_email`
 - `mail_provider`
+- `sender_policy_mode`
+- `allowed_senders_count`
 - `ingress_mode`
 - `poll_seconds`
 - `worker_alive`

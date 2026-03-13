@@ -18,6 +18,7 @@ The runtime now has two mailbox harnesses:
 
 - Monitors one mailbox
 - Keeps per-thread continuity using the last OpenAI `response.id`
+- Can run in `all` or `allowlist` sender policy mode
 - Retries transient failures with backoff
 - Dead-letters exhausted failures for replay
 - Exposes health, dead-letter, and replay endpoints
@@ -68,6 +69,7 @@ Use the simplest path first: `google_api`.
    For the quickest local test:
    - choose `MAIL_PROVIDER=google_api`
    - enter a real agent mailbox address
+   - set `SENDER_POLICY_MODE=allowlist` if you only want approved senders to get replies
    - complete the one-time Google OAuth flow
 
 3. Run the local checks.
@@ -98,12 +100,14 @@ If you want hook-based ingress instead, rerun `mailroom connections` and choose 
 make setup
 make wizard
 make connections
+make access
 make auth
 make doctor
 make run
 
 mailroom setup
 mailroom connections
+mailroom access
 mailroom doctor
 mailroom auth
 mailroom run --reload
@@ -118,7 +122,7 @@ curl -X POST "http://127.0.0.1:8787/dead-letter/requeue/<message_id>?process_now
 
 This repo is still an MVP. It does not currently provide:
 - a human approval gate before sending
-- sender allowlists or policy rules
+- denylists or richer sender policy rules beyond a simple email allowlist
 - multi-instance coordination
 - multi-mailbox orchestration
 - attachment ingestion
