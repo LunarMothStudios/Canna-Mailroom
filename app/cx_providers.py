@@ -4,6 +4,8 @@ import base64
 import importlib
 import json
 import re
+import time
+import uuid
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 from urllib import error, parse, request
@@ -67,6 +69,126 @@ def _read_json_file(path: str) -> Any:
         return json.loads(file_path.read_text())
     except json.JSONDecodeError as err:
         raise ProviderConfigurationError(f"Invalid JSON in {file_path}: {err}") from err
+
+
+def _normalize_email(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _digits_only(value: str | None) -> str:
+    return re.sub(r"\D+", "", value or "")
+
+
+def _request_json_url(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    body: dict[str, Any] | None = None,
+    timeout: int = 15,
+) -> Any:
+    payload: bytes | None = None
+    request_headers = dict(headers or {})
+    if body is not None:
+        payload = json.dumps(body).encode("utf-8")
+        request_headers.setdefault("Content-Type", "application/json")
+
+    req = request.Request(url, data=payload, headers=request_headers, method=method.upper())
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            raw_body = resp.read().decode("utf-8")
+            if not raw_body:
+                return None
+            return json.loads(raw_body)
+    except error.HTTPError as err:
+        raw_body = err.read().decode("utf-8", errors="ignore")
+        message = raw_body.strip() or f"Request failed with status {err.code}"
+        raise ProviderAPIError(message, status_code=err.code) from err
+    except error.URLError as err:
+        raise ProviderAPIError(f"Request failed: {err.reason}", status_code=503) from err
+
+
+def _request_json_path(
+    base_url: str,
+    path: str,
+    *,
+    method: str = "GET",
+    query: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    body: dict[str, Any] | None = None,
+    timeout: int = 15,
+) -> Any:
+    url = f"{base_url.rstrip('/')}{path}"
+    if query:
+        query_string = parse.urlencode({key: value for key, value in query.items() if value is not None})
+        if query_string:
+            url = f"{url}?{query_string}"
+    return _request_json_url(method, url, headers=headers, body=body, timeout=timeout)
+
+
+def _list_or_empty(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item).strip() for item in value if str(item).strip())
+
+
+def _coerce_money(value: Any) -> str | None:
+    if value in {None, ""}:
+        return None
+    try:
+        return f"${float(value):.2f}"
+    except (TypeError, ValueError):
+        return str(value).strip() or None
+
+
+def _coerce_bridge_order_outcome(payload: Any, *, source: str):
+    if not isinstance(payload, dict):
+        raise ProviderAPIError("Bridge order provider returned an unexpected payload.", status_code=502)
+
+    result_status = str(payload.get("status") or "").strip().lower()
+    payload_source = str(payload.get("source") or source).strip() or source
+    if result_status == "not_found":
+        return OrderNotFound(
+            order_number=str(payload.get("order_number") or "").strip(),
+            follow_up=str(payload.get("follow_up") or "I couldn't find that order number."),
+            source=payload_source,
+        )
+    if result_status == "identity_mismatch":
+        return OrderVerificationMismatch(
+            order_number=str(payload.get("order_number") or "").strip(),
+            follow_up=str(payload.get("follow_up") or "I found the order, but I could not verify it belongs to the sender."),
+            verification_summary=str(payload.get("verification_summary") or "The bridge provider could not verify the sender."),
+            source=payload_source,
+        )
+    if result_status not in {"", "found"} and "order_status" not in payload and "order_number" not in payload:
+        raise ProviderAPIError("Bridge order provider returned an unsupported status payload.", status_code=502)
+
+    return OrderLookupResult(
+        order_number=str(payload.get("order_number") or "").strip(),
+        order_status=str(payload.get("order_status") or payload.get("status_label") or payload.get("status") or "Unknown"),
+        fulfillment_type=str(payload.get("fulfillment_type") or "").strip() or None,
+        location_name=str(payload.get("location_name") or "").strip() or None,
+        location_id=str(payload.get("location_id") or "").strip() or None,
+        ordered_at=str(payload.get("ordered_at") or "").strip() or None,
+        scheduled_window=str(payload.get("scheduled_window") or "").strip() or None,
+        ready_window=str(payload.get("ready_window") or "").strip() or None,
+        payment_summary=str(payload.get("payment_summary") or "").strip() or None,
+        customer_safe_notes=_list_or_empty(payload.get("customer_safe_notes")),
+        source=payload_source,
+        verification_summary=str(payload.get("verification_summary") or "").strip() or None,
+    )
+
+
+def _pick_first_mapping(payload: Any) -> dict[str, Any] | None:
+    if isinstance(payload, dict):
+        if isinstance(payload.get("data"), dict):
+            return payload["data"]
+        if isinstance(payload.get("data"), list) and payload["data"] and isinstance(payload["data"][0], dict):
+            return payload["data"][0]
+        return payload
+    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+        return payload[0]
+    return None
 
 
 def _topic_keywords() -> dict[str, tuple[str, ...]]:
@@ -520,34 +642,17 @@ class DutchieOrderProvider(OrderProvider):
         query: dict[str, Any] | None = None,
         body: dict[str, Any] | None = None,
     ) -> Any:
-        url = f"{self.base_url}{path}"
-        if query:
-            query_string = parse.urlencode({key: value for key, value in query.items() if value is not None})
-            if query_string:
-                url = f"{url}?{query_string}"
-
-        payload: bytes | None = None
-        headers = {
-            "Accept": "application/json",
-            "Authorization": self._auth_header(),
-        }
-        if body is not None:
-            payload = json.dumps(body).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-
-        req = request.Request(url, data=payload, headers=headers, method=method.upper())
-        try:
-            with request.urlopen(req, timeout=15) as resp:
-                raw_body = resp.read().decode("utf-8")
-                if not raw_body:
-                    return None
-                return json.loads(raw_body)
-        except error.HTTPError as err:
-            raw_body = err.read().decode("utf-8", errors="ignore")
-            message = raw_body.strip() or f"Dutchie API request failed with status {err.code}"
-            raise ProviderAPIError(message, status_code=err.code) from err
-        except error.URLError as err:
-            raise ProviderAPIError(f"Dutchie API request failed: {err.reason}", status_code=503) from err
+        return _request_json_path(
+            self.base_url,
+            path,
+            method=method,
+            query=query,
+            headers={
+                "Accept": "application/json",
+                "Authorization": self._auth_header(),
+            },
+            body=body,
+        )
 
     def _get_location_identity(self) -> dict[str, Any]:
         if self._location_identity is None:
@@ -666,6 +771,291 @@ class DutchieOrderProvider(OrderProvider):
         )
 
 
+class BridgeOrderProvider(OrderProvider):
+    def __init__(
+        self,
+        endpoint_url: str,
+        *,
+        auth_token: str = "",
+        source: str = "bridge",
+        timeout_seconds: int = 15,
+        provider_name: str | None = None,
+    ):
+        self.endpoint_url = endpoint_url.strip()
+        self.auth_token = auth_token.strip()
+        self.source = source.strip() or "bridge"
+        self.timeout_seconds = max(1, int(timeout_seconds))
+        self.provider_name = (provider_name or self.source).strip() or self.source
+        if not self.endpoint_url:
+            raise ProviderConfigurationError("Bridge order provider requires a non-empty endpoint URL.")
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Accept": "application/json"}
+        if self.auth_token:
+            headers["Authorization"] = f"Bearer {self.auth_token}"
+        return headers
+
+    def lookup(
+        self,
+        order_number: str,
+        *,
+        customer_email: str | None = None,
+        phone_last4: str | None = None,
+    ):
+        clean_order_number = order_number.strip()
+        if not clean_order_number:
+            return OrderNotFound(order_number="", follow_up="Please share the order number you want me to check.", source=self.source)
+
+        body = {
+            "provider": self.provider_name,
+            "order_number": clean_order_number,
+            "customer_email": customer_email,
+            "phone_last4": phone_last4,
+        }
+        try:
+            payload = _request_json_url(
+                "POST",
+                self.endpoint_url,
+                headers=self._headers(),
+                body=body,
+                timeout=self.timeout_seconds,
+            )
+        except ProviderAPIError as err:
+            if err.status_code == 404:
+                return OrderNotFound(
+                    order_number=clean_order_number,
+                    follow_up=f"I couldn't find that order number in {self.provider_name}.",
+                    source=self.source,
+                )
+            raise
+        return _coerce_bridge_order_outcome(payload, source=self.source)
+
+
+class JaneOrderProvider(BridgeOrderProvider):
+    def __init__(self, bridge_url: str, bridge_token: str = "", timeout_seconds: int = 15):
+        if not bridge_url.strip():
+            raise ProviderConfigurationError("JANE_BRIDGE_URL is required when ORDER_PROVIDER=jane.")
+        super().__init__(
+            bridge_url,
+            auth_token=bridge_token,
+            source="jane",
+            timeout_seconds=timeout_seconds,
+            provider_name="jane",
+        )
+
+
+class TreezOrderProvider(OrderProvider):
+    def __init__(
+        self,
+        dispensary: str,
+        organization_id: str,
+        certificate_id: str,
+        private_key_file: str,
+        base_url: str = "https://api-prod.treez.io",
+    ):
+        self.dispensary = dispensary.strip()
+        self.organization_id = organization_id.strip()
+        self.certificate_id = certificate_id.strip()
+        self.private_key_file = Path(private_key_file).expanduser()
+        self.base_url = base_url.rstrip("/")
+        if not self.dispensary:
+            raise ProviderConfigurationError("TREEZ_DISPENSARY is required when ORDER_PROVIDER=treez.")
+        if not self.organization_id:
+            raise ProviderConfigurationError("TREEZ_ORGANIZATION_ID is required when ORDER_PROVIDER=treez.")
+        if not self.certificate_id:
+            raise ProviderConfigurationError("TREEZ_CERTIFICATE_ID is required when ORDER_PROVIDER=treez.")
+        if not self.private_key_file.exists():
+            raise ProviderConfigurationError(f"Missing TREEZ_PRIVATE_KEY_FILE: {self.private_key_file}")
+        self._private_key: Any | None = None
+
+    def _load_private_key(self):
+        if self._private_key is None:
+            try:
+                from cryptography.hazmat.primitives import serialization
+            except ImportError as err:
+                raise ProviderConfigurationError("cryptography is required for the built-in Treez connector.") from err
+
+            try:
+                self._private_key = serialization.load_pem_private_key(self.private_key_file.read_bytes(), password=None)
+            except ValueError as err:
+                raise ProviderConfigurationError(f"Invalid Treez private key file: {self.private_key_file}") from err
+        return self._private_key
+
+    def _base_headers(self, url: str) -> dict[str, str]:
+        return {
+            "Accept": "application/json",
+            "Authorization": self._build_auth_header(url),
+        }
+
+    def _build_auth_header(self, audience_url: str) -> str:
+        private_key = self._load_private_key()
+        now_ms = int(time.time() * 1000)
+        signed_header = {
+            "aud": audience_url,
+            "iss": self.certificate_id,
+            "oid": self.organization_id,
+            "iat": now_ms,
+            "exp": now_ms + 30000,
+            "jti": str(uuid.uuid4()),
+        }
+        encoded_header = base64.urlsafe_b64encode(
+            json.dumps(signed_header, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii").rstrip("=")
+        try:
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.asymmetric import padding
+        except ImportError as err:
+            raise ProviderConfigurationError("cryptography is required for the built-in Treez connector.") from err
+
+        signature = private_key.sign(
+            encoded_header.encode("utf-8"),
+            padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+        encoded_signature = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
+        return f"{encoded_header}.{encoded_signature}"
+
+    def _request_json(self, method: str, path: str, *, query: dict[str, Any] | None = None) -> Any:
+        normalized_path = path if path.startswith("/") else f"/{path}"
+        base_path = f"/dispensary/v3/{parse.quote(self.dispensary)}{normalized_path}"
+        audience_url = f"{self.base_url}{base_path}"
+        if query:
+            query_string = parse.urlencode({key: value for key, value in query.items() if value is not None})
+            if query_string:
+                audience_url = f"{audience_url}?{query_string}"
+        return _request_json_url("GET", audience_url, headers=self._base_headers(audience_url))
+
+    def _extract_verification_summary(
+        self,
+        ticket: dict[str, Any],
+        *,
+        customer_email: str | None,
+        phone_last4: str | None,
+    ) -> str | None:
+        notes: list[str] = []
+        customer_payload = ticket.get("customer") if isinstance(ticket.get("customer"), dict) else {}
+        order_email = _normalize_email(
+            ticket.get("customer_email")
+            or ticket.get("email")
+            or customer_payload.get("email")
+        )
+        if customer_email:
+            expected_email = _normalize_email(customer_email)
+            if order_email and expected_email != order_email:
+                return "The sender email did not match the email on the Treez ticket."
+            if order_email:
+                notes.append("Matched the sender email to the Treez ticket.")
+            else:
+                notes.append("Treez lookup did not expose a stable email field for sender verification.")
+
+        order_phone_last4 = _digits_only(
+            ticket.get("phone_last4")
+            or ticket.get("phone")
+            or customer_payload.get("phone")
+        )[-4:]
+        if phone_last4:
+            expected_last4 = _digits_only(phone_last4)[-4:]
+            if order_phone_last4 and expected_last4 and expected_last4 != order_phone_last4:
+                return "The phone digits provided did not match the Treez ticket."
+            if order_phone_last4 and expected_last4:
+                notes.append("Matched the phone digits to the Treez ticket.")
+            else:
+                notes.append("Treez lookup did not expose enough phone data to verify the last four digits.")
+
+        return " ".join(notes) if notes else None
+
+    def lookup(
+        self,
+        order_number: str,
+        *,
+        customer_email: str | None = None,
+        phone_last4: str | None = None,
+    ):
+        clean_order_number = order_number.strip()
+        if not clean_order_number:
+            return OrderNotFound(order_number="", follow_up="Please share the order number you want me to check.", source="treez")
+
+        try:
+            payload = self._request_json("GET", f"/ticket/ordernumber/{parse.quote(clean_order_number)}")
+        except ProviderAPIError as err:
+            if err.status_code == 404:
+                return OrderNotFound(
+                    order_number=clean_order_number,
+                    follow_up="I couldn't find that order number in Treez.",
+                    source="treez",
+                )
+            raise
+
+        if isinstance(payload, dict) and str(payload.get("resultCode") or "").strip().upper() in {"NOT_FOUND", "NO_RECORDS"}:
+            return OrderNotFound(
+                order_number=clean_order_number,
+                follow_up="I couldn't find that order number in Treez.",
+                source="treez",
+            )
+
+        ticket = _pick_first_mapping(payload)
+        if not ticket:
+            return OrderNotFound(
+                order_number=clean_order_number,
+                follow_up="I couldn't find that order number in Treez.",
+                source="treez",
+            )
+
+        verification_summary = self._extract_verification_summary(
+            ticket,
+            customer_email=customer_email,
+            phone_last4=phone_last4,
+        )
+        if verification_summary and verification_summary.lower().startswith("the sender email"):
+            return OrderVerificationMismatch(
+                order_number=clean_order_number,
+                follow_up="I found the order number, but I could not verify it belongs to the sender.",
+                verification_summary=verification_summary,
+                source="treez",
+            )
+        if verification_summary and verification_summary.lower().startswith("the phone digits"):
+            return OrderVerificationMismatch(
+                order_number=clean_order_number,
+                follow_up="I found the order number, but I could not verify it belongs to the sender.",
+                verification_summary=verification_summary,
+                source="treez",
+            )
+
+        total = _coerce_money(
+            ticket.get("total")
+            or ticket.get("grand_total")
+            or ticket.get("order_total")
+        )
+        payment_status = str(ticket.get("payment_status") or ticket.get("paymentStatus") or "").strip()
+        payment_summary_parts = [part for part in [payment_status, total] if part]
+        notes: list[str] = []
+        for candidate in (
+            ticket.get("ticket_note"),
+            ticket.get("notes"),
+            ticket.get("refund_reason"),
+            ticket.get("status_message"),
+        ):
+            if isinstance(candidate, str) and candidate.strip():
+                notes.append(candidate.strip())
+        if verification_summary and not verification_summary.lower().startswith("the "):
+            notes.append(verification_summary)
+
+        return OrderLookupResult(
+            order_number=str(ticket.get("order_number") or ticket.get("orderNumber") or clean_order_number),
+            order_status=str(ticket.get("order_status") or ticket.get("status") or "Unknown"),
+            fulfillment_type=str(ticket.get("type") or ticket.get("fulfillment_type") or "").strip() or None,
+            location_name=str(ticket.get("location_name") or ticket.get("locationName") or self.dispensary).strip() or None,
+            location_id=str(ticket.get("location_id") or ticket.get("locationId") or "").strip() or None,
+            ordered_at=str(ticket.get("date_created") or ticket.get("created_at") or ticket.get("createdAt") or "").strip() or None,
+            scheduled_window=str(ticket.get("scheduled_date") or ticket.get("scheduled_window") or "").strip() or None,
+            ready_window=str(ticket.get("ready_window") or ticket.get("ready_at") or ticket.get("packed_ready_at") or "").strip() or None,
+            payment_summary=". ".join(payment_summary_parts) if payment_summary_parts else None,
+            customer_safe_notes=tuple(notes),
+            source="treez",
+            verification_summary=verification_summary,
+        )
+
+
 def _import_object(import_path: str) -> Any:
     module_name = ""
     attr_name = ""
@@ -708,6 +1098,27 @@ def load_order_provider(settings: Settings) -> OrderProvider:
             location_key=settings.dutchie_location_key,
             integrator_key=settings.dutchie_integrator_key,
             base_url=settings.dutchie_api_base_url,
+        )
+    if settings.order_provider == "treez":
+        return TreezOrderProvider(
+            dispensary=settings.treez_dispensary,
+            organization_id=settings.treez_organization_id,
+            certificate_id=settings.treez_certificate_id,
+            private_key_file=settings.treez_private_key_file,
+            base_url=settings.treez_api_base_url,
+        )
+    if settings.order_provider == "jane":
+        return JaneOrderProvider(
+            bridge_url=settings.jane_bridge_url,
+            bridge_token=settings.jane_bridge_token,
+            timeout_seconds=settings.jane_bridge_timeout_seconds,
+        )
+    if settings.order_provider == "bridge":
+        return BridgeOrderProvider(
+            settings.bridge_order_provider_url,
+            auth_token=settings.bridge_order_provider_token,
+            source=settings.bridge_order_provider_source,
+            timeout_seconds=settings.bridge_order_provider_timeout_seconds,
         )
     if settings.order_provider == "custom":
         return _build_custom_order_provider(settings.order_provider_factory, settings)

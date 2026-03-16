@@ -19,6 +19,9 @@ The tool contracts stay stable across dispensaries. Real store differences are h
 - Pluggable order lookup:
   - `manual`
   - `dutchie`
+  - `treez`
+  - `jane` via bridge contract
+  - `bridge` for other vendors
   - `custom` via Python import path
 - Manual store knowledge backed by JSON
 
@@ -125,6 +128,47 @@ If you want hook-based ingress instead, rerun `mailroom connections` and choose 
   - uses `DUTCHIE_LOCATION_KEY`
   - optionally uses `DUTCHIE_INTEGRATOR_KEY`
   - uses `DUTCHIE_API_BASE_URL`
+- `TreezOrderProvider`
+  - uses `TREEZ_DISPENSARY`
+  - uses `TREEZ_ORGANIZATION_ID`
+  - uses `TREEZ_CERTIFICATE_ID`
+  - uses `TREEZ_PRIVATE_KEY_FILE`
+  - uses `TREEZ_API_BASE_URL`
+- `JaneOrderProvider`
+  - uses `JANE_BRIDGE_URL`
+  - optionally uses `JANE_BRIDGE_TOKEN`
+  - expects a merchant-operated bridge that returns the Mailroom bridge response contract
+- `BridgeOrderProvider`
+  - uses `BRIDGE_ORDER_PROVIDER_URL`
+  - optionally uses `BRIDGE_ORDER_PROVIDER_TOKEN`
+  - uses `BRIDGE_ORDER_PROVIDER_SOURCE`
+  - lets operators connect any vendor-specific lookup service without writing a Python adapter
+
+### Provider notes
+
+- `dutchie` is a direct API-backed adapter.
+- `treez` is a direct API-backed adapter.
+- `jane` is bridge-backed in this repo because Jane’s public merchant docs do not expose a stable read-only order lookup endpoint here.
+- `bridge` is the general fallback for Jane-like or private vendor integrations.
+
+### Bridge contract
+
+Bridge-backed providers send:
+
+```json
+{
+  "provider": "jane",
+  "order_number": "1001",
+  "customer_email": "alex@example.com",
+  "phone_last4": "4242"
+}
+```
+
+They expect one of these response shapes:
+
+- `{"status":"found","order_number":"1001","order_status":"Ready", ...}`
+- `{"status":"not_found","order_number":"1001","follow_up":"..."}`
+- `{"status":"identity_mismatch","order_number":"1001","follow_up":"...","verification_summary":"..."}`
 
 ### Custom order providers
 
@@ -172,7 +216,7 @@ curl -X POST "http://127.0.0.1:8787/dead-letter/requeue/<message_id>?process_now
 - `app/main.py`: FastAPI lifecycle, provider selection, and operator endpoints
 - `app/ai_agent.py`: OpenAI Responses API calls and tool loop
 - `app/cx_toolset.py`: stable two-tool CX surface
-- `app/cx_providers.py`: provider interfaces, manual providers, Dutchie adapter, and custom loader
+- `app/cx_providers.py`: provider interfaces, manual providers, Dutchie and Treez adapters, bridge providers, and custom loader
 - `app/gmail_worker.py`: provider-agnostic email processing, retries, dead-letter handling
 - `app/state.py`: SQLite schema and state access layer
 - `app/settings.py`: environment-driven configuration

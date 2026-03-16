@@ -35,12 +35,13 @@ flowchart LR
 | `credentials.json` | Google OAuth desktop client | `google_api` only |
 | `token.json` | Google access and refresh token | `google_api` only |
 | `MANUAL_ORDER_FILE` target | manual order lookup data | when `ORDER_PROVIDER=manual` |
+| `TREEZ_PRIVATE_KEY_FILE` target | Treez PEM signing key | when `ORDER_PROVIDER=treez` |
 | custom provider module code | custom order adapter implementation | when `ORDER_PROVIDER=custom` |
 
 Important note:
 - In `gog` mode, Mailroom does not use `credentials.json` or `token.json`.
 - `gog` still manages its own Google auth material outside this repo.
-- In `dutchie` mode, Dutchie credentials still live in `.env`.
+- In `dutchie`, `treez`, `jane`, and `bridge` modes, provider credentials still live in `.env`.
 
 ## Local Deployment
 
@@ -130,6 +131,13 @@ Best when:
 Operational requirements:
 - one-time Google OAuth flow
 - durable `token.json`
+
+### `dutchie`, `treez`, `jane`, and `bridge`
+
+Operational requirements:
+- keep the provider credentials current in `.env`
+- for `treez`, persist the PEM private key file referenced by `TREEZ_PRIVATE_KEY_FILE`
+- for `jane` and `bridge`, keep the bridge endpoint reachable from the Mailroom host
 
 ### `gog`
 

@@ -4,10 +4,17 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from app.cx_models import ProviderAPIError
-from app.cx_providers import DutchieOrderProvider, ManualKnowledgeProvider, ManualOrderProvider
+from app.cx_providers import (
+    BridgeOrderProvider,
+    DutchieOrderProvider,
+    JaneOrderProvider,
+    ManualKnowledgeProvider,
+    ManualOrderProvider,
+    TreezOrderProvider,
+)
 
 
 STORE_KNOWLEDGE = {
@@ -82,6 +89,22 @@ class ProviderFixtureMixin:
         self.addCleanup(temp_dir.cleanup)
         path = Path(temp_dir.name) / "data.json"
         path.write_text(json.dumps(payload))
+        return str(path)
+
+    def make_treez_private_key_file(self) -> str:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        private_key_bytes = key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        path = Path(temp_dir.name) / "treez-private.pem"
+        path.write_bytes(private_key_bytes)
         return str(path)
 
 
@@ -214,3 +237,120 @@ class DutchieOrderProviderTests(unittest.TestCase):
                 with self.assertRaises(ProviderAPIError) as ctx:
                     provider.lookup("80245")
                 self.assertEqual(ctx.exception.status_code, status_code)
+
+
+class BridgeOrderProviderTests(unittest.TestCase):
+    def test_bridge_payload_maps_to_found_result(self):
+        provider = BridgeOrderProvider("https://bridge.example.com/orders", auth_token="secret", source="bridge")
+        provider._headers = Mock(return_value={"Accept": "application/json", "Authorization": "Bearer secret"})
+
+        with patch("app.cx_providers._request_json_url", return_value={
+            "status": "found",
+            "order_number": "B100",
+            "order_status": "Ready",
+            "fulfillment_type": "Delivery",
+            "location_name": "Northside",
+            "customer_safe_notes": ["Driver is en route."],
+        }):
+            result = provider.lookup("B100", customer_email="alex@example.com")
+
+        payload = result.to_tool_output()
+        self.assertEqual(payload["status"], "found")
+        self.assertEqual(payload["source"], "bridge")
+        self.assertEqual(payload["order_status"], "Ready")
+
+    def test_bridge_404_maps_to_not_found(self):
+        provider = BridgeOrderProvider("https://bridge.example.com/orders", source="bridge")
+
+        with patch(
+            "app.cx_providers._request_json_url",
+            side_effect=ProviderAPIError("missing", status_code=404),
+        ):
+            result = provider.lookup("B404")
+
+        self.assertEqual(result.to_tool_output()["status"], "not_found")
+
+
+class JaneOrderProviderTests(unittest.TestCase):
+    def test_jane_provider_uses_bridge_contract(self):
+        provider = JaneOrderProvider("https://jane-bridge.example.com", "token", 20)
+
+        with patch("app.cx_providers._request_json_url", return_value={
+            "status": "found",
+            "order_number": "J100",
+            "order_status": "Accepted",
+        }):
+            result = provider.lookup("J100")
+
+        self.assertEqual(result.to_tool_output()["source"], "jane")
+
+
+class TreezOrderProviderTests(ProviderFixtureMixin, unittest.TestCase):
+    def make_provider(self) -> TreezOrderProvider:
+        return TreezOrderProvider(
+            dispensary="downtown-cannabis",
+            organization_id="org-123",
+            certificate_id="cert-abc",
+            private_key_file=self.make_treez_private_key_file(),
+        )
+
+    def test_auth_header_is_signed(self):
+        provider = self.make_provider()
+
+        header = provider._build_auth_header("https://api-prod.treez.io/dispensary/v3/downtown-cannabis/ticket/ordernumber/1001")
+
+        self.assertEqual(len(header.split(".")), 2)
+
+    def test_successful_lookup_maps_treez_ticket(self):
+        provider = self.make_provider()
+        provider._request_json = Mock(
+            return_value={
+                "resultCode": "SUCCESS",
+                "data": {
+                    "order_number": "1001",
+                    "order_status": "ready_for_pickup",
+                    "type": "pickup",
+                    "location_name": "Downtown",
+                    "date_created": "2026-03-14T15:10:00Z",
+                    "scheduled_date": "2026-03-14T16:00:00Z",
+                    "payment_status": "unpaid",
+                    "total": 87.5,
+                    "ticket_note": "Bring a government-issued photo ID.",
+                    "customer_email": "alex@example.com",
+                    "phone": "(555) 555-4242",
+                },
+            }
+        )
+
+        result = provider.lookup("1001", customer_email="alex@example.com", phone_last4="4242")
+
+        payload = result.to_tool_output()
+        self.assertEqual(payload["status"], "found")
+        self.assertEqual(payload["source"], "treez")
+        self.assertIn("unpaid", payload["payment_summary"])
+        self.assertIn("Matched the sender email", payload["verification_summary"])
+
+    def test_lookup_returns_not_found_for_404(self):
+        provider = self.make_provider()
+        provider._request_json = Mock(side_effect=ProviderAPIError("missing", status_code=404))
+
+        result = provider.lookup("missing")
+
+        self.assertEqual(result.to_tool_output()["status"], "not_found")
+
+    def test_lookup_returns_identity_mismatch_for_email_conflict(self):
+        provider = self.make_provider()
+        provider._request_json = Mock(
+            return_value={
+                "resultCode": "SUCCESS",
+                "data": {
+                    "order_number": "1001",
+                    "order_status": "accepted",
+                    "customer_email": "someoneelse@example.com",
+                },
+            }
+        )
+
+        result = provider.lookup("1001", customer_email="alex@example.com")
+
+        self.assertEqual(result.to_tool_output()["status"], "identity_mismatch")

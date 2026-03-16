@@ -14,7 +14,7 @@ def normalize_sender_policy_mode(raw_value: str | None) -> str:
 
 def normalize_order_provider(raw_value: str | None) -> str:
     candidate = (raw_value or "manual").strip().lower()
-    if candidate in {"manual", "dutchie", "custom"}:
+    if candidate in {"manual", "dutchie", "treez", "jane", "bridge", "custom"}:
         return candidate
     return "manual"
 
@@ -58,6 +58,18 @@ class Settings:
     dutchie_location_key: str = os.getenv("DUTCHIE_LOCATION_KEY", "") or os.getenv("DUTCHIE_API_KEY", "")
     dutchie_integrator_key: str = os.getenv("DUTCHIE_INTEGRATOR_KEY", "")
     dutchie_api_base_url: str = os.getenv("DUTCHIE_API_BASE_URL", "https://api.pos.dutchie.com")
+    treez_dispensary: str = os.getenv("TREEZ_DISPENSARY", "")
+    treez_organization_id: str = os.getenv("TREEZ_ORGANIZATION_ID", "")
+    treez_certificate_id: str = os.getenv("TREEZ_CERTIFICATE_ID", "")
+    treez_private_key_file: str = os.getenv("TREEZ_PRIVATE_KEY_FILE", "")
+    treez_api_base_url: str = os.getenv("TREEZ_API_BASE_URL", "https://api-prod.treez.io")
+    bridge_order_provider_url: str = os.getenv("BRIDGE_ORDER_PROVIDER_URL", "")
+    bridge_order_provider_token: str = os.getenv("BRIDGE_ORDER_PROVIDER_TOKEN", "")
+    bridge_order_provider_source: str = os.getenv("BRIDGE_ORDER_PROVIDER_SOURCE", "bridge")
+    bridge_order_provider_timeout_seconds: int = int(os.getenv("BRIDGE_ORDER_PROVIDER_TIMEOUT_SECONDS", "15"))
+    jane_bridge_url: str = os.getenv("JANE_BRIDGE_URL", "")
+    jane_bridge_token: str = os.getenv("JANE_BRIDGE_TOKEN", "")
+    jane_bridge_timeout_seconds: int = int(os.getenv("JANE_BRIDGE_TIMEOUT_SECONDS", os.getenv("BRIDGE_ORDER_PROVIDER_TIMEOUT_SECONDS", "15")))
     system_prompt_file: str = os.getenv("SYSTEM_PROMPT_FILE", "./SYSTEM_PROMPT.md")
     gog_account: str = os.getenv("GOG_ACCOUNT", "")
     gog_gmail_topic: str = os.getenv("GOG_GMAIL_TOPIC", "")

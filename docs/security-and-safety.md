@@ -10,6 +10,9 @@ This document describes the security posture of the current codebase.
 | `credentials.json` | local file | `app/google_clients.py` | Gmail OAuth bootstrap in `google_api` mode |
 | `token.json` | local file | `app/google_clients.py` | ongoing Gmail access in `google_api` mode |
 | `DUTCHIE_LOCATION_KEY` / `DUTCHIE_INTEGRATOR_KEY` | `.env` | `app/cx_providers.py` | third-party order lookup access |
+| `TREEZ_ORGANIZATION_ID` / `TREEZ_CERTIFICATE_ID` / `TREEZ_PRIVATE_KEY_FILE` | `.env` and local file | `app/cx_providers.py` | third-party order lookup access and request signing authority |
+| `JANE_BRIDGE_TOKEN` | `.env` | `app/cx_providers.py` | access to the merchant-operated Jane bridge |
+| `BRIDGE_ORDER_PROVIDER_TOKEN` | `.env` | `app/cx_providers.py` | access to a generic bridge-backed order service |
 | `GOG_GMAIL_HOOK_TOKEN` | `.env` | `app/main.py` | unauthorized callers could inject fake hook events |
 | `GOG_GMAIL_PUSH_TOKEN` | `.env` | `app/gog_watcher.py` | unauthorized callers could reach the local `gog` watch endpoint |
 | `state.db` | local file | `app/state.py`, `app/gmail_worker.py` | thread pointers, message metadata, dead-letter details, cached message bodies |
@@ -77,6 +80,8 @@ Missing safeguards:
 - `search_store_knowledge` reads local JSON only
 - `lookup_order` may send order number and verification data to the configured order provider
 - the built-in Dutchie adapter may send sender email to Dutchie for best-effort customer verification
+- the built-in Treez adapter signs each request with the configured private key and may send sender verification hints when the caller provides them
+- bridge-backed Jane or generic bridge providers send order identifiers and optional verification hints to the configured bridge URL
 
 ## Safe Defaults For Local Use
 

@@ -47,7 +47,7 @@ flowchart TD
     MailProvider -- gog --> Watcher["GogGmailWatcherManager"]
     MailProvider -- gog --> MailboxB["GogMailboxProvider"]
 
-    OrderProvider --> OrderImpl["Manual, Dutchie, or custom OrderProvider"]
+    OrderProvider --> OrderImpl["Manual, Dutchie, Treez, Jane bridge, generic bridge, or custom OrderProvider"]
     KnowledgeProvider --> KnowledgeImpl["ManualKnowledgeProvider"]
     OrderImpl --> Toolset["DispensaryCxToolset"]
     KnowledgeImpl --> Toolset
@@ -69,7 +69,7 @@ flowchart TD
 | FastAPI app | `app/main.py` | startup orchestration and operator endpoints |
 | Email agent | `app/ai_agent.py` | OpenAI Responses API calls and tool loop |
 | CX toolset | `app/cx_toolset.py` | exact two-tool surface exposed to the model |
-| CX providers | `app/cx_providers.py` | provider contracts, manual knowledge/orders, Dutchie adapter, custom loader |
+| CX providers | `app/cx_providers.py` | provider contracts, manual knowledge/orders, Dutchie and Treez adapters, bridge-backed Jane support, generic bridge support, and custom loader |
 | Gmail API provider | `app/google_mailbox.py` | Gmail read/send/thread scan/mark-read in `google_api` mode |
 | `gog` provider | `app/gog_mailbox.py` | outbound reply send in `gog` mode |
 | `gog` watcher manager | `app/gog_watcher.py` | `gog gmail watch start/serve` lifecycle |

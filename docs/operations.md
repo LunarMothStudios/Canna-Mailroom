@@ -11,7 +11,7 @@ This runbook covers the system as implemented today: one process, one mailbox, o
 3. Activate the virtual environment: `source .venv/bin/activate`.
 4. Run `mailroom setup`.
 5. Choose `MAIL_PROVIDER=google_api`.
-6. Choose `ORDER_PROVIDER=manual` unless you already have live Dutchie or a custom adapter ready.
+6. Choose `ORDER_PROVIDER=manual` unless you already have live Dutchie, Treez, a bridge endpoint, or a custom adapter ready.
 7. Keep the sample `STORE_KNOWLEDGE_FILE` and `MANUAL_ORDER_FILE` paths unless you have real store data ready.
 8. Set `SENDER_POLICY_MODE=allowlist` if you want to restrict replies during testing.
 9. Complete the local Google OAuth flow.
@@ -53,6 +53,7 @@ Restart whenever you change:
 - `SYSTEM_PROMPT.md`
 - `STORE_KNOWLEDGE_FILE`
 - `MANUAL_ORDER_FILE`
+- `TREEZ_PRIVATE_KEY_FILE`
 - `credentials.json` or `token.json` in `google_api` mode
 - any `gog` watcher or token settings in `gog` mode
 - sender policy settings such as `SENDER_POLICY_MODE` or `ALLOWED_SENDERS`
@@ -65,12 +66,17 @@ Environment variables that materially affect operations:
 | Setting | Default | Effect |
 |---|---|---|
 | `MAIL_PROVIDER` | `google_api` | selects polling or hook ingress |
-| `ORDER_PROVIDER` | `manual` | selects manual, Dutchie, or custom order lookup |
+| `ORDER_PROVIDER` | `manual` | selects manual, Dutchie, Treez, Jane bridge, generic bridge, or custom order lookup |
 | `KNOWLEDGE_PROVIDER` | `manual` | selects the store knowledge backend |
 | `STORE_KNOWLEDGE_FILE` | `./examples/store_knowledge.sample.json` | store FAQ, policy, and location data |
 | `MANUAL_ORDER_FILE` | `./examples/manual_orders.sample.json` | manual order lookup file |
 | `DUTCHIE_LOCATION_KEY` | empty | Dutchie location credential when `ORDER_PROVIDER=dutchie` |
 | `DUTCHIE_API_BASE_URL` | `https://api.pos.dutchie.com` | Dutchie API base URL |
+| `TREEZ_DISPENSARY` | empty | Treez dispensary slug or name when `ORDER_PROVIDER=treez` |
+| `TREEZ_PRIVATE_KEY_FILE` | empty | Treez PEM signing key when `ORDER_PROVIDER=treez` |
+| `TREEZ_API_BASE_URL` | `https://api-prod.treez.io` | Treez API base URL |
+| `JANE_BRIDGE_URL` | empty | Jane bridge endpoint when `ORDER_PROVIDER=jane` |
+| `BRIDGE_ORDER_PROVIDER_URL` | empty | generic bridge endpoint when `ORDER_PROVIDER=bridge` |
 | `SENDER_POLICY_MODE` | `all` | reply to all senders or only an explicit allowlist |
 | `ALLOWED_SENDERS` | empty | comma-separated sender emails used when policy mode is `allowlist` |
 | `POLL_SECONDS` | `20` | delay between polling cycles in `google_api` mode |
@@ -209,10 +215,12 @@ Response:
 2. Run `mailroom doctor`.
 3. Confirm the configured `STORE_KNOWLEDGE_FILE` exists.
 4. If `ORDER_PROVIDER=manual`, confirm the configured `MANUAL_ORDER_FILE` exists.
-5. If `ORDER_PROVIDER=custom`, confirm `ORDER_PROVIDER_FACTORY` still imports.
-6. In `google_api` mode, confirm `credentials.json` and `token.json`.
-7. In `gog` mode, confirm `gog` is installed and the watcher settings are non-empty.
-8. Restart the app.
+5. If `ORDER_PROVIDER=treez`, confirm the Treez credential values are set and `TREEZ_PRIVATE_KEY_FILE` exists.
+6. If `ORDER_PROVIDER=jane` or `ORDER_PROVIDER=bridge`, confirm the bridge URL is still reachable and the bearer token is current if you use one.
+7. If `ORDER_PROVIDER=custom`, confirm `ORDER_PROVIDER_FACTORY` still imports.
+8. In `google_api` mode, confirm `credentials.json` and `token.json`.
+9. In `gog` mode, confirm `gog` is installed and the watcher settings are non-empty.
+10. Restart the app.
 
 ### Incident B: No Replies In `google_api` Mode
 

@@ -11,7 +11,16 @@ No. The public tool contracts are provider-agnostic:
 - `lookup_order`
 - `search_store_knowledge`
 
-Dutchie is only the first built-in live order adapter. The core runtime can also use manual JSON files or a custom Python order provider.
+Dutchie is one built-in live order adapter, alongside Treez. The core runtime can also use manual JSON files, a generic bridge service, the Jane bridge path, or a custom Python order provider.
+
+## Is Jane supported?
+
+Yes, but in this repo Jane is bridge-backed rather than direct API-backed.
+
+- Use `ORDER_PROVIDER=jane`
+- Point `JANE_BRIDGE_URL` at your merchant-operated Jane lookup service
+
+That bridge should translate Jane-specific auth and payloads into the Mailroom order result contract.
 
 ## What tools are exposed to the model?
 

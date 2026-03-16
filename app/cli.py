@@ -122,7 +122,7 @@ def normalize_sender_policy_mode(raw_value: str | None) -> str:
 
 def normalize_order_provider(raw_value: str | None) -> str:
     candidate = (raw_value or "").strip().lower()
-    if candidate in {"manual", "dutchie", "custom"}:
+    if candidate in {"manual", "dutchie", "treez", "jane", "bridge", "custom"}:
         return candidate
     return candidate or "manual"
 
@@ -130,11 +130,11 @@ def normalize_order_provider(raw_value: str | None) -> str:
 def prompt_order_provider(default: str | None = None) -> str:
     while True:
         provider = normalize_order_provider(
-            prompt("Order provider (manual, dutchie, or custom)", default=default or "manual", required=True)
+            prompt("Order provider (manual, dutchie, treez, jane, bridge, or custom)", default=default or "manual", required=True)
         )
-        if provider in {"manual", "dutchie", "custom"}:
+        if provider in {"manual", "dutchie", "treez", "jane", "bridge", "custom"}:
             return provider
-        print("Choose `manual`, `dutchie`, or `custom`.")
+        print("Choose `manual`, `dutchie`, `treez`, `jane`, `bridge`, or `custom`.")
 
 
 def normalize_knowledge_provider(raw_value: str | None) -> str:
@@ -393,6 +393,69 @@ def configure_cx_providers(env_path: Path, env_values: dict[str, str]) -> dict[s
             default=env_values.get("DUTCHIE_API_BASE_URL") or "https://api.pos.dutchie.com",
             required=True,
         )
+    elif env_values["ORDER_PROVIDER"] == "treez":
+        env_values["TREEZ_DISPENSARY"] = prompt(
+            "Treez dispensary slug or name",
+            default=env_values.get("TREEZ_DISPENSARY") or None,
+            required=True,
+        )
+        env_values["TREEZ_ORGANIZATION_ID"] = prompt(
+            "Treez organization ID",
+            default=env_values.get("TREEZ_ORGANIZATION_ID") or None,
+            required=True,
+        )
+        env_values["TREEZ_CERTIFICATE_ID"] = prompt(
+            "Treez certificate ID",
+            default=env_values.get("TREEZ_CERTIFICATE_ID") or None,
+            required=True,
+        )
+        env_values["TREEZ_PRIVATE_KEY_FILE"] = prompt(
+            "Treez private key PEM path",
+            default=env_values.get("TREEZ_PRIVATE_KEY_FILE") or None,
+            required=True,
+        )
+        env_values["TREEZ_API_BASE_URL"] = prompt(
+            "Treez API base URL",
+            default=env_values.get("TREEZ_API_BASE_URL") or "https://api-prod.treez.io",
+            required=True,
+        )
+    elif env_values["ORDER_PROVIDER"] == "jane":
+        env_values["JANE_BRIDGE_URL"] = prompt(
+            "Jane bridge URL",
+            default=env_values.get("JANE_BRIDGE_URL") or None,
+            required=True,
+        )
+        env_values["JANE_BRIDGE_TOKEN"] = prompt(
+            "Jane bridge bearer token (optional)",
+            default=env_values.get("JANE_BRIDGE_TOKEN") or None,
+            secret=True,
+        )
+        env_values["JANE_BRIDGE_TIMEOUT_SECONDS"] = prompt(
+            "Jane bridge timeout seconds",
+            default=env_values.get("JANE_BRIDGE_TIMEOUT_SECONDS") or env_values.get("BRIDGE_ORDER_PROVIDER_TIMEOUT_SECONDS") or "15",
+            required=True,
+        )
+    elif env_values["ORDER_PROVIDER"] == "bridge":
+        env_values["BRIDGE_ORDER_PROVIDER_URL"] = prompt(
+            "Bridge order provider URL",
+            default=env_values.get("BRIDGE_ORDER_PROVIDER_URL") or None,
+            required=True,
+        )
+        env_values["BRIDGE_ORDER_PROVIDER_TOKEN"] = prompt(
+            "Bridge order provider bearer token (optional)",
+            default=env_values.get("BRIDGE_ORDER_PROVIDER_TOKEN") or None,
+            secret=True,
+        )
+        env_values["BRIDGE_ORDER_PROVIDER_SOURCE"] = prompt(
+            "Bridge provider source label",
+            default=env_values.get("BRIDGE_ORDER_PROVIDER_SOURCE") or "bridge",
+            required=True,
+        )
+        env_values["BRIDGE_ORDER_PROVIDER_TIMEOUT_SECONDS"] = prompt(
+            "Bridge timeout seconds",
+            default=env_values.get("BRIDGE_ORDER_PROVIDER_TIMEOUT_SECONDS") or "15",
+            required=True,
+        )
     else:
         env_values["ORDER_PROVIDER_FACTORY"] = prompt(
             "Custom order provider factory (module:attribute)",
@@ -616,6 +679,10 @@ def doctor_command(_: argparse.Namespace) -> int:
         env_values.get("MANUAL_ORDER_FILE"),
         "./examples/manual_orders.sample.json",
     )
+    treez_private_key_path = resolve_runtime_path(
+        env_values.get("TREEZ_PRIVATE_KEY_FILE"),
+        "./treez-private-key.pem",
+    )
     prompt_path = resolve_runtime_path(env_values.get("SYSTEM_PROMPT_FILE"), "./SYSTEM_PROMPT.md")
     state_path = resolve_runtime_path(env_values.get("STATE_DB"), "./state.db")
 
@@ -626,7 +693,7 @@ def doctor_command(_: argparse.Namespace) -> int:
         (bool(env_values.get("OPENAI_API_KEY")), "OPENAI_API_KEY", "set in .env"),
         (bool(env_values.get("AGENT_EMAIL")), "AGENT_EMAIL", env_values.get("AGENT_EMAIL", "missing")),
         (mail_provider in {"google_api", "gog"}, "MAIL_PROVIDER", mail_provider),
-        (order_provider in {"manual", "dutchie", "custom"}, "ORDER_PROVIDER", order_provider),
+        (order_provider in {"manual", "dutchie", "treez", "jane", "bridge", "custom"}, "ORDER_PROVIDER", order_provider),
         (knowledge_provider == "manual", "KNOWLEDGE_PROVIDER", knowledge_provider),
         (store_knowledge_path.exists(), "STORE_KNOWLEDGE_FILE", str(store_knowledge_path)),
         (
@@ -664,6 +731,59 @@ def doctor_command(_: argparse.Namespace) -> int:
                     bool(env_values.get("DUTCHIE_API_BASE_URL", "").strip()),
                     "DUTCHIE_API_BASE_URL",
                     env_values.get("DUTCHIE_API_BASE_URL", "missing"),
+                ),
+            ]
+        )
+    elif order_provider == "treez":
+        checks.extend(
+            [
+                (bool(env_values.get("TREEZ_DISPENSARY", "").strip()), "TREEZ_DISPENSARY", env_values.get("TREEZ_DISPENSARY", "missing")),
+                (
+                    bool(env_values.get("TREEZ_ORGANIZATION_ID", "").strip()),
+                    "TREEZ_ORGANIZATION_ID",
+                    env_values.get("TREEZ_ORGANIZATION_ID", "missing"),
+                ),
+                (
+                    bool(env_values.get("TREEZ_CERTIFICATE_ID", "").strip()),
+                    "TREEZ_CERTIFICATE_ID",
+                    env_values.get("TREEZ_CERTIFICATE_ID", "missing"),
+                ),
+                (treez_private_key_path.exists(), "TREEZ_PRIVATE_KEY_FILE", str(treez_private_key_path)),
+                (
+                    bool(env_values.get("TREEZ_API_BASE_URL", "").strip()),
+                    "TREEZ_API_BASE_URL",
+                    env_values.get("TREEZ_API_BASE_URL", "missing"),
+                ),
+            ]
+        )
+    elif order_provider == "jane":
+        checks.extend(
+            [
+                (bool(env_values.get("JANE_BRIDGE_URL", "").strip()), "JANE_BRIDGE_URL", env_values.get("JANE_BRIDGE_URL", "missing")),
+                (
+                    bool(env_values.get("JANE_BRIDGE_TIMEOUT_SECONDS", "").strip() or env_values.get("BRIDGE_ORDER_PROVIDER_TIMEOUT_SECONDS", "").strip()),
+                    "JANE_BRIDGE_TIMEOUT_SECONDS",
+                    env_values.get("JANE_BRIDGE_TIMEOUT_SECONDS") or env_values.get("BRIDGE_ORDER_PROVIDER_TIMEOUT_SECONDS") or "missing",
+                ),
+            ]
+        )
+    elif order_provider == "bridge":
+        checks.extend(
+            [
+                (
+                    bool(env_values.get("BRIDGE_ORDER_PROVIDER_URL", "").strip()),
+                    "BRIDGE_ORDER_PROVIDER_URL",
+                    env_values.get("BRIDGE_ORDER_PROVIDER_URL", "missing"),
+                ),
+                (
+                    bool(env_values.get("BRIDGE_ORDER_PROVIDER_SOURCE", "").strip()),
+                    "BRIDGE_ORDER_PROVIDER_SOURCE",
+                    env_values.get("BRIDGE_ORDER_PROVIDER_SOURCE", "missing"),
+                ),
+                (
+                    bool(env_values.get("BRIDGE_ORDER_PROVIDER_TIMEOUT_SECONDS", "").strip()),
+                    "BRIDGE_ORDER_PROVIDER_TIMEOUT_SECONDS",
+                    env_values.get("BRIDGE_ORDER_PROVIDER_TIMEOUT_SECONDS", "missing"),
                 ),
             ]
         )

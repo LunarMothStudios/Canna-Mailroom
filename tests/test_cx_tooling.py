@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.cx_models import KnowledgeAnswer, OrderLookupResult, ProviderConfigurationError
-from app.cx_providers import load_knowledge_provider, load_order_provider
+from app.cx_providers import BridgeOrderProvider, JaneOrderProvider, TreezOrderProvider, load_knowledge_provider, load_order_provider
 from app.cx_toolset import DispensaryCxToolset
 
 
@@ -72,6 +72,23 @@ class ProviderLoadingTests(unittest.TestCase):
         path.write_text(json.dumps(payload))
         return str(path)
 
+    def make_treez_private_key_file(self) -> str:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        path = Path(temp_dir.name) / "treez-private.pem"
+        path.write_bytes(
+            key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+        return str(path)
+
     def test_load_manual_providers(self):
         settings = SimpleNamespace(
             order_provider="manual",
@@ -96,7 +113,7 @@ class ProviderLoadingTests(unittest.TestCase):
     def test_load_custom_provider_from_factory(self):
         settings = SimpleNamespace(
             order_provider="custom",
-            order_provider_factory="test_cx_tooling:build_custom_provider",
+            order_provider_factory=f"{__name__}:build_custom_provider",
         )
 
         provider = load_order_provider(settings)
@@ -106,8 +123,47 @@ class ProviderLoadingTests(unittest.TestCase):
     def test_invalid_custom_provider_is_rejected(self):
         settings = SimpleNamespace(
             order_provider="custom",
-            order_provider_factory="test_cx_tooling:build_invalid_provider",
+            order_provider_factory=f"{__name__}:build_invalid_provider",
         )
 
         with self.assertRaises(ProviderConfigurationError):
             load_order_provider(settings)
+
+    def test_load_treez_provider(self):
+        settings = SimpleNamespace(
+            order_provider="treez",
+            treez_dispensary="downtown-cannabis",
+            treez_organization_id="org-123",
+            treez_certificate_id="cert-abc",
+            treez_private_key_file=self.make_treez_private_key_file(),
+            treez_api_base_url="https://api-prod.treez.io",
+        )
+
+        provider = load_order_provider(settings)
+
+        self.assertIsInstance(provider, TreezOrderProvider)
+
+    def test_load_jane_provider(self):
+        settings = SimpleNamespace(
+            order_provider="jane",
+            jane_bridge_url="https://bridge.example.com/jane",
+            jane_bridge_token="secret",
+            jane_bridge_timeout_seconds=20,
+        )
+
+        provider = load_order_provider(settings)
+
+        self.assertIsInstance(provider, JaneOrderProvider)
+
+    def test_load_bridge_provider(self):
+        settings = SimpleNamespace(
+            order_provider="bridge",
+            bridge_order_provider_url="https://bridge.example.com/orders",
+            bridge_order_provider_token="secret",
+            bridge_order_provider_source="flowhub",
+            bridge_order_provider_timeout_seconds=12,
+        )
+
+        provider = load_order_provider(settings)
+
+        self.assertIsInstance(provider, BridgeOrderProvider)

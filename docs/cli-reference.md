@@ -112,7 +112,7 @@ It currently prompts for:
 - `KNOWLEDGE_PROVIDER`
 - `STORE_KNOWLEDGE_FILE`
 - `ORDER_PROVIDER`
-- either `MANUAL_ORDER_FILE`, Dutchie credentials, or `ORDER_PROVIDER_FACTORY`
+- either `MANUAL_ORDER_FILE`, Dutchie credentials, Treez credentials, bridge settings, or `ORDER_PROVIDER_FACTORY`
 
 Provider behavior:
 
@@ -182,6 +182,9 @@ Order-provider specific checks:
 |---|---|
 | `manual` | `MANUAL_ORDER_FILE` exists |
 | `dutchie` | `DUTCHIE_LOCATION_KEY` and `DUTCHIE_API_BASE_URL` are set |
+| `treez` | `TREEZ_DISPENSARY`, `TREEZ_ORGANIZATION_ID`, `TREEZ_CERTIFICATE_ID`, `TREEZ_PRIVATE_KEY_FILE`, and `TREEZ_API_BASE_URL` are set |
+| `jane` | `JANE_BRIDGE_URL` is set |
+| `bridge` | `BRIDGE_ORDER_PROVIDER_URL`, `BRIDGE_ORDER_PROVIDER_SOURCE`, and `BRIDGE_ORDER_PROVIDER_TIMEOUT_SECONDS` are set |
 | `custom` | `ORDER_PROVIDER_FACTORY` imports successfully |
 
 ```bash
@@ -300,7 +303,7 @@ curl -X POST "http://127.0.0.1:8787/dead-letter/requeue/<message_id>?process_now
 | `AGENT_EMAIL` | mailbox address used by the runtime |
 | `SENDER_POLICY_MODE` | `all` or `allowlist` |
 | `ALLOWED_SENDERS` | sender allowlist when allowlist mode is used |
-| `ORDER_PROVIDER` | `manual`, `dutchie`, or `custom` |
+| `ORDER_PROVIDER` | `manual`, `dutchie`, `treez`, `jane`, `bridge`, or `custom` |
 | `ORDER_PROVIDER_FACTORY` | custom Python factory path for custom order providers |
 | `KNOWLEDGE_PROVIDER` | currently `manual` only |
 | `STORE_KNOWLEDGE_FILE` | path to the store knowledge JSON file |
@@ -308,6 +311,18 @@ curl -X POST "http://127.0.0.1:8787/dead-letter/requeue/<message_id>?process_now
 | `DUTCHIE_LOCATION_KEY` | Dutchie location key for the built-in Dutchie adapter |
 | `DUTCHIE_INTEGRATOR_KEY` | optional Dutchie integrator key |
 | `DUTCHIE_API_BASE_URL` | Dutchie API base URL |
+| `TREEZ_DISPENSARY` | Treez dispensary slug or name for the built-in Treez adapter |
+| `TREEZ_ORGANIZATION_ID` | Treez organization ID used in the signed auth header |
+| `TREEZ_CERTIFICATE_ID` | Treez certificate ID used in the signed auth header |
+| `TREEZ_PRIVATE_KEY_FILE` | PEM private key file used to sign Treez requests |
+| `TREEZ_API_BASE_URL` | Treez API base URL |
+| `JANE_BRIDGE_URL` | merchant-operated Jane bridge endpoint |
+| `JANE_BRIDGE_TOKEN` | optional bearer token for the Jane bridge |
+| `JANE_BRIDGE_TIMEOUT_SECONDS` | request timeout for the Jane bridge |
+| `BRIDGE_ORDER_PROVIDER_URL` | generic bridge endpoint for other vendors |
+| `BRIDGE_ORDER_PROVIDER_TOKEN` | optional bearer token for the generic bridge |
+| `BRIDGE_ORDER_PROVIDER_SOURCE` | source label returned in bridge-backed order results |
+| `BRIDGE_ORDER_PROVIDER_TIMEOUT_SECONDS` | request timeout for the generic bridge |
 | `GOOGLE_CREDENTIALS_FILE` | desktop OAuth client JSON for `google_api` mode |
 | `GOOGLE_TOKEN_FILE` | Gmail OAuth token file for `google_api` mode |
 | `SYSTEM_PROMPT_FILE` | prompt file loaded at startup |
