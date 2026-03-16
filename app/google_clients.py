@@ -8,8 +8,6 @@ from googleapiclient.discovery import build
 
 SCOPES = [
     "https://mail.google.com/",
-    "https://www.googleapis.com/auth/drive",
-    "https://www.googleapis.com/auth/documents",
 ]
 
 
@@ -33,11 +31,3 @@ def get_credentials(token_file: str, credentials_file: str) -> Credentials:
 
 def get_gmail_service(creds: Credentials):
     return build("gmail", "v1", credentials=creds)
-
-
-def get_drive_service(creds: Credentials):
-    return build("drive", "v3", credentials=creds)
-
-
-def get_docs_service(creds: Credentials):
-    return build("docs", "v1", credentials=creds)

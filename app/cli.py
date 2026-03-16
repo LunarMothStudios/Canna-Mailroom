@@ -18,8 +18,6 @@ import webbrowser
 
 GOOGLE_SETUP_URLS = {
     "Gmail API": "https://console.cloud.google.com/apis/library/gmail.googleapis.com",
-    "Google Drive API": "https://console.cloud.google.com/apis/library/drive.googleapis.com",
-    "Google Docs API": "https://console.cloud.google.com/apis/library/docs.googleapis.com",
     "OAuth branding": "https://console.cloud.google.com/auth/branding",
     "OAuth audience": "https://console.cloud.google.com/auth/audience",
     "OAuth clients": "https://console.cloud.google.com/auth/clients",
@@ -122,6 +120,40 @@ def normalize_sender_policy_mode(raw_value: str | None) -> str:
     return candidate or "all"
 
 
+def normalize_order_provider(raw_value: str | None) -> str:
+    candidate = (raw_value or "").strip().lower()
+    if candidate in {"manual", "dutchie", "custom"}:
+        return candidate
+    return candidate or "manual"
+
+
+def prompt_order_provider(default: str | None = None) -> str:
+    while True:
+        provider = normalize_order_provider(
+            prompt("Order provider (manual, dutchie, or custom)", default=default or "manual", required=True)
+        )
+        if provider in {"manual", "dutchie", "custom"}:
+            return provider
+        print("Choose `manual`, `dutchie`, or `custom`.")
+
+
+def normalize_knowledge_provider(raw_value: str | None) -> str:
+    candidate = (raw_value or "").strip().lower()
+    if candidate == "manual":
+        return candidate
+    return candidate or "manual"
+
+
+def prompt_knowledge_provider(default: str | None = None) -> str:
+    while True:
+        provider = normalize_knowledge_provider(
+            prompt("Knowledge provider (manual only for now)", default=default or "manual", required=True)
+        )
+        if provider == "manual":
+            return provider
+        print("Choose `manual`.")
+
+
 def prompt_sender_policy_mode(default: str | None = None) -> str:
     while True:
         mode = normalize_sender_policy_mode(
@@ -205,6 +237,30 @@ def validate_desktop_oauth_client(path: Path) -> tuple[bool, str]:
         return False, f"OAuth client JSON is missing keys: {', '.join(missing)}"
 
     return True, "Desktop OAuth client looks valid."
+
+
+def validate_import_path(raw_value: str | None) -> tuple[bool, str]:
+    raw = (raw_value or "").strip()
+    if not raw:
+        return False, "missing import path"
+
+    module_name = ""
+    attr_name = ""
+    if ":" in raw:
+        module_name, attr_name = raw.split(":", 1)
+    elif "." in raw:
+        module_name, attr_name = raw.rsplit(".", 1)
+    else:
+        return False, "expected `module:attribute` or `module.attribute`"
+
+    try:
+        module = importlib.import_module(module_name)
+    except Exception as err:
+        return False, f"failed to import module `{module_name}`: {err}"
+
+    if not hasattr(module, attr_name):
+        return False, f"module `{module_name}` does not define `{attr_name}`"
+    return True, f"{module_name}:{attr_name}"
 
 
 def open_google_setup_urls():
@@ -296,6 +352,53 @@ def configure_sender_policy(env_path: Path, env_values: dict[str, str]) -> dict[
         default=env_values.get("ALLOWED_SENDERS") or "",
         required=env_values["SENDER_POLICY_MODE"] == "allowlist",
     )
+
+    write_env_file(env_path, env_values)
+    print(f"Saved {env_path}")
+    return env_values
+
+
+def configure_cx_providers(env_path: Path, env_values: dict[str, str]) -> dict[str, str]:
+    print_header("Dispensary CX Providers")
+    print("Configure the store knowledge base and order lookup source used by the email agent.")
+
+    env_values["KNOWLEDGE_PROVIDER"] = prompt_knowledge_provider(env_values.get("KNOWLEDGE_PROVIDER") or "manual")
+    env_values["STORE_KNOWLEDGE_FILE"] = prompt(
+        "Store knowledge JSON path",
+        default=env_values.get("STORE_KNOWLEDGE_FILE") or "./examples/store_knowledge.sample.json",
+        required=True,
+    )
+
+    env_values["ORDER_PROVIDER"] = prompt_order_provider(env_values.get("ORDER_PROVIDER") or "manual")
+    if env_values["ORDER_PROVIDER"] == "manual":
+        env_values["MANUAL_ORDER_FILE"] = prompt(
+            "Manual orders JSON path",
+            default=env_values.get("MANUAL_ORDER_FILE") or "./examples/manual_orders.sample.json",
+            required=True,
+        )
+    elif env_values["ORDER_PROVIDER"] == "dutchie":
+        env_values["DUTCHIE_LOCATION_KEY"] = prompt(
+            "Dutchie location key",
+            default=env_values.get("DUTCHIE_LOCATION_KEY") or env_values.get("DUTCHIE_API_KEY") or None,
+            secret=True,
+            required=True,
+        )
+        env_values["DUTCHIE_INTEGRATOR_KEY"] = prompt(
+            "Dutchie integrator key (optional)",
+            default=env_values.get("DUTCHIE_INTEGRATOR_KEY") or None,
+            secret=True,
+        )
+        env_values["DUTCHIE_API_BASE_URL"] = prompt(
+            "Dutchie API base URL",
+            default=env_values.get("DUTCHIE_API_BASE_URL") or "https://api.pos.dutchie.com",
+            required=True,
+        )
+    else:
+        env_values["ORDER_PROVIDER_FACTORY"] = prompt(
+            "Custom order provider factory (module:attribute)",
+            default=env_values.get("ORDER_PROVIDER_FACTORY") or None,
+            required=True,
+        )
 
     write_env_file(env_path, env_values)
     print(f"Saved {env_path}")
@@ -489,7 +592,6 @@ def run_gog_connection_actions(env_values: dict[str, str]) -> int:
     print()
     print("Notes:")
     print("- gog mode skips credentials.json and token.json")
-    print("- Drive/Docs tools are disabled in gog mode for now")
     print("- If Gmail does not reach your local watcher, verify the public push endpoint and Pub/Sub subscription.")
     return 0
 
@@ -502,8 +604,18 @@ def complete_gog_setup(env_path: Path, env_values: dict[str, str]) -> int:
 def doctor_command(_: argparse.Namespace) -> int:
     env_values = parse_env_file(REPO_ROOT / ".env")
     mail_provider = normalize_mail_provider(env_values.get("MAIL_PROVIDER"))
+    order_provider = normalize_order_provider(env_values.get("ORDER_PROVIDER"))
+    knowledge_provider = normalize_knowledge_provider(env_values.get("KNOWLEDGE_PROVIDER"))
     credentials_path = resolve_runtime_path(env_values.get("GOOGLE_CREDENTIALS_FILE"), "./credentials.json")
     token_path = resolve_runtime_path(env_values.get("GOOGLE_TOKEN_FILE"), "./token.json")
+    store_knowledge_path = resolve_runtime_path(
+        env_values.get("STORE_KNOWLEDGE_FILE"),
+        "./examples/store_knowledge.sample.json",
+    )
+    manual_order_path = resolve_runtime_path(
+        env_values.get("MANUAL_ORDER_FILE"),
+        "./examples/manual_orders.sample.json",
+    )
     prompt_path = resolve_runtime_path(env_values.get("SYSTEM_PROMPT_FILE"), "./SYSTEM_PROMPT.md")
     state_path = resolve_runtime_path(env_values.get("STATE_DB"), "./state.db")
 
@@ -514,6 +626,9 @@ def doctor_command(_: argparse.Namespace) -> int:
         (bool(env_values.get("OPENAI_API_KEY")), "OPENAI_API_KEY", "set in .env"),
         (bool(env_values.get("AGENT_EMAIL")), "AGENT_EMAIL", env_values.get("AGENT_EMAIL", "missing")),
         (mail_provider in {"google_api", "gog"}, "MAIL_PROVIDER", mail_provider),
+        (order_provider in {"manual", "dutchie", "custom"}, "ORDER_PROVIDER", order_provider),
+        (knowledge_provider == "manual", "KNOWLEDGE_PROVIDER", knowledge_provider),
+        (store_knowledge_path.exists(), "STORE_KNOWLEDGE_FILE", str(store_knowledge_path)),
         (
             normalize_sender_policy_mode(env_values.get("SENDER_POLICY_MODE")) in {"all", "allowlist"},
             "SENDER_POLICY_MODE",
@@ -534,6 +649,27 @@ def doctor_command(_: argparse.Namespace) -> int:
                 env_values.get("ALLOWED_SENDERS", "missing"),
             )
         )
+
+    if order_provider == "manual":
+        checks.append((manual_order_path.exists(), "MANUAL_ORDER_FILE", str(manual_order_path)))
+    elif order_provider == "dutchie":
+        checks.extend(
+            [
+                (
+                    bool(env_values.get("DUTCHIE_LOCATION_KEY") or env_values.get("DUTCHIE_API_KEY")),
+                    "DUTCHIE_LOCATION_KEY",
+                    "set in .env",
+                ),
+                (
+                    bool(env_values.get("DUTCHIE_API_BASE_URL", "").strip()),
+                    "DUTCHIE_API_BASE_URL",
+                    env_values.get("DUTCHIE_API_BASE_URL", "missing"),
+                ),
+            ]
+        )
+    else:
+        custom_factory_ok, custom_factory_detail = validate_import_path(env_values.get("ORDER_PROVIDER_FACTORY"))
+        checks.append((custom_factory_ok, "ORDER_PROVIDER_FACTORY", custom_factory_detail))
 
     if mail_provider == "google_api":
         checks.extend(
@@ -568,6 +704,8 @@ def doctor_command(_: argparse.Namespace) -> int:
     print(f"Repo root: {REPO_ROOT}")
     print(f"State DB path: {state_path}")
     print(f"Mail provider: {mail_provider}")
+    print(f"Order provider: {order_provider}")
+    print(f"Knowledge provider: {knowledge_provider}")
     print()
 
     failed = False
@@ -644,7 +782,7 @@ def wait_for_credentials_file(credentials_path: Path):
         print(f"Expected location: {credentials_path}")
         print()
         print("Do this in Google Cloud Console:")
-        print("1. Enable Gmail API, Google Drive API, and Google Docs API.")
+        print("1. Enable Gmail API.")
         print("2. Configure the OAuth branding and audience screens.")
         print("3. Create an OAuth client with Application type = Desktop app.")
         print("4. Download the JSON and save it as the credentials file above.")
@@ -688,6 +826,7 @@ def setup_command(_: argparse.Namespace) -> int:
             It will:
             - create or update `.env`
             - collect the base Mailroom runtime settings
+            - configure dispensary CX providers
             - hand off to the selected email connection wizard
             - show next steps to launch and test the app
             """
@@ -720,10 +859,7 @@ def setup_command(_: argparse.Namespace) -> int:
         default=env_values.get("POLL_SECONDS") or "20",
         required=True,
     )
-    env_values["GOOGLE_DRIVE_DEFAULT_FOLDER_ID"] = prompt(
-        "Default Google Drive folder ID (optional)",
-        default=env_values.get("GOOGLE_DRIVE_DEFAULT_FOLDER_ID") or "",
-    )
+    configure_cx_providers(env_path, env_values)
 
     write_env_file(env_path, env_values)
     print(f"Saved {env_path}")

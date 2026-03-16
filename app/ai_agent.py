@@ -4,9 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from openai import OpenAI
-
-from app.tools import GoogleWorkspaceTools
+from app.cx_models import AgentToolset
 
 
 class EmailAgent:
@@ -14,114 +12,24 @@ class EmailAgent:
         self,
         api_key: str,
         model: str,
-        tools: GoogleWorkspaceTools | None,
+        toolset: AgentToolset,
         system_prompt_path: str,
+        client: Any | None = None,
     ):
-        self.client = OpenAI(api_key=api_key)
+        if client is None:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=api_key)
+        self.client = client
         self.model = model
-        self.tools = tools
+        self.toolset = toolset
         self.system_prompt = Path(system_prompt_path).read_text()
 
     def _tool_specs(self) -> list[dict[str, Any]]:
-        specs = [
-            {
-                "type": "function",
-                "name": "research_web",
-                "description": "Research the public web and return a concise cited summary.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                    },
-                    "required": ["query"],
-                },
-            },
-        ]
-        if not self.tools:
-            return specs
-
-        specs.extend(
-            [
-                {
-                    "type": "function",
-                    "name": "list_drive_files",
-                    "description": "List files in Google Drive folder",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "folder_id": {"type": "string"},
-                            "limit": {"type": "integer", "minimum": 1, "maximum": 50},
-                        },
-                    },
-                },
-                {
-                    "type": "function",
-                    "name": "create_google_doc",
-                    "description": "Create a Google Doc in a folder with optional initial content",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "title": {"type": "string"},
-                            "initial_content": {"type": "string"},
-                            "folder_id": {"type": "string"},
-                        },
-                        "required": ["title"],
-                    },
-                },
-                {
-                    "type": "function",
-                    "name": "append_google_doc",
-                    "description": "Append content to an existing Google Doc",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "doc_id": {"type": "string"},
-                            "content": {"type": "string"},
-                        },
-                        "required": ["doc_id", "content"],
-                    },
-                },
-                {
-                    "type": "function",
-                    "name": "read_google_doc",
-                    "description": "Read text content from an existing Google Doc",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "doc_id": {"type": "string"},
-                        },
-                        "required": ["doc_id"],
-                    },
-                },
-            ]
-        )
-        return specs
-
-    def _research_web(self, query: str) -> dict[str, Any]:
-        response = self.client.responses.create(
-            model=self.model,
-            tools=[{"type": "web_search"}],
-            input=(
-                "Research the user's query and return a concise summary with source links.\n\n"
-                f"Query: {query}"
-            ),
-        )
-        return {"query": query, "summary": response.output_text.strip()}
+        return self.toolset.specs()
 
     def _run_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
-        if name == "research_web":
-            return self._research_web(**args)
-        if not self.tools:
-            return {"error": f"Tool unavailable in this runtime: {name}"}
-        if name == "list_drive_files":
-            return self.tools.list_drive_files(**args)
-        if name == "create_google_doc":
-            return self.tools.create_google_doc(**args)
-        if name == "append_google_doc":
-            return self.tools.append_google_doc(**args)
-        if name == "read_google_doc":
-            return self.tools.read_google_doc(**args)
-        return {"error": f"Unknown tool: {name}"}
+        return self.toolset.run(name, args)
 
     def respond_in_thread(
         self,

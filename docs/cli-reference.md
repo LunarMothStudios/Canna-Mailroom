@@ -1,7 +1,5 @@
 # CLI Reference
 
-_Last verified against commit `b6c46e6`._
-
 The operator surface is made up of:
 
 - the `mailroom` CLI in `app/cli.py`
@@ -10,30 +8,27 @@ The operator surface is made up of:
 
 All runtime tuning happens through environment variables, not command flags.
 
-## Command Surface At A Glance
+## Command Surface
 
-| Command surface | Source | Purpose |
-|---|---|---|
-| `mailroom setup` | `app/cli.py` | interactive setup wizard for `.env` plus provider-specific onboarding |
-| `mailroom connections` | `app/cli.py` | rerun only the mailbox connection flow for the current provider |
-| `mailroom access` | `app/cli.py` | interactive sender access policy wizard |
-| `mailroom doctor` | `app/cli.py` | local health check for config, provider prerequisites, and Python deps |
-| `mailroom auth` | `app/cli.py` | run the Google OAuth browser flow for `google_api` mode |
-| `mailroom run` | `app/cli.py` | start the FastAPI app directly |
-| `make setup` | `Makefile` | create `.venv` and install the package editable |
-| `make wizard` | `Makefile` | run `mailroom setup` inside `.venv` |
-| `make connections` | `Makefile` | run `mailroom connections` inside `.venv` |
-| `make access` | `Makefile` | run `mailroom access` inside `.venv` |
-| `make auth` | `Makefile` | run `mailroom auth` inside `.venv` |
-| `make doctor` | `Makefile` | run `mailroom doctor` inside `.venv` |
-| `make run` | `Makefile` | run `mailroom run --reload` inside `.venv` |
-| HTTP endpoints | `app/main.py` | health checks, hook ingress, dead-letter inspection, and replay |
+| Command | Purpose |
+|---|---|
+| `mailroom setup` | interactive setup wizard for `.env`, CX providers, and mailbox connection |
+| `mailroom connections` | rerun only the mailbox connection flow |
+| `mailroom access` | rerun only the sender access policy flow |
+| `mailroom doctor` | local health check for config, provider prerequisites, and Python deps |
+| `mailroom auth` | run the Google OAuth browser flow for `google_api` mode |
+| `mailroom run` | start the FastAPI app directly |
+| `make setup` | create `.venv` and install the package editable |
+| `make wizard` | run `mailroom setup` inside `.venv` |
+| `make connections` | run `mailroom connections` inside `.venv` |
+| `make access` | run `mailroom access` inside `.venv` |
+| `make auth` | run `mailroom auth` inside `.venv` |
+| `make doctor` | run `mailroom doctor` inside `.venv` |
+| `make run` | run `mailroom run --reload` inside `.venv` |
 
 ## Make Targets
 
 ### `make setup`
-
-Creates `.venv` with Python 3.11, upgrades packaging tools, and installs the package editable.
 
 ```bash
 make setup
@@ -47,73 +42,77 @@ python3.11 -m venv .venv
 . .venv/bin/activate && pip install -e .
 ```
 
-If your Python 3.11 binary is not named `python3.11`, override it:
-
-```bash
-make setup PYTHON=/path/to/python3.11
-```
-
 ### `make wizard`
-
-Runs the full interactive setup wizard.
 
 ```bash
 make wizard
 ```
 
-### `make connections`
+Runs the full interactive setup wizard.
 
-Reruns only the mailbox connection flow.
+### `make connections`
 
 ```bash
 make connections
 ```
 
-### `make access`
+Reruns only the mailbox connection flow.
 
-Runs the sender access wizard.
+### `make access`
 
 ```bash
 make access
 ```
 
-### `make auth`
+Reruns only the sender access policy flow.
 
-Runs the Google OAuth browser flow. This is only relevant in `google_api` mode.
+### `make auth`
 
 ```bash
 make auth
 ```
 
-### `make doctor`
+Runs the Google OAuth browser flow. Only relevant in `google_api` mode.
 
-Runs local config and dependency checks.
+### `make doctor`
 
 ```bash
 make doctor
 ```
 
-### `make run`
+Runs local config and dependency checks.
 
-Starts Uvicorn on port `8787` with `--reload`.
+### `make run`
 
 ```bash
 make run
 ```
 
-Notes:
-- `google_api` mode starts the polling thread.
-- `gog` mode starts the watcher manager instead of the polling thread.
+Starts Uvicorn on port `8787` with `--reload`.
 
-## Mailroom CLI
-
-### `mailroom setup`
+## `mailroom setup`
 
 Interactive wizard that:
+
 - creates `.env` from `.env.example` when needed
-- prompts for `OPENAI_API_KEY`, `MAIL_PROVIDER`, `AGENT_EMAIL`, sender policy, model, and core runtime settings
-- hands off to the provider-specific connection flow
+- prompts for base runtime settings
+- configures the dispensary CX providers
+- hands off to the mailbox-specific connection flow
 - prints the next commands to run
+
+It currently prompts for:
+
+- `OPENAI_API_KEY`
+- `MAIL_PROVIDER`
+- `AGENT_EMAIL`
+- `SENDER_POLICY_MODE`
+- `ALLOWED_SENDERS` when needed
+- `OPENAI_MODEL`
+- `POLL_SECONDS`
+- `KNOWLEDGE_PROVIDER`
+- `STORE_KNOWLEDGE_FILE`
+- `ORDER_PROVIDER`
+- either `MANUAL_ORDER_FILE`, Dutchie credentials, or `ORDER_PROVIDER_FACTORY`
 
 Provider behavior:
 
@@ -129,64 +128,73 @@ source .venv/bin/activate
 mailroom setup
 ```
 
-### `mailroom connections`
+## `mailroom connections`
 
 Reruns just the mailbox setup flow using the current `.env`.
 
 Use this when:
-- you want to switch providers
+
+- you want to switch between `google_api` and `gog`
 - you want to change `gog` watcher settings
-- you want to rerun only the Google connection steps without re-entering the OpenAI settings
+- you want to rerun only the Google mailbox auth steps
 
 ```bash
 source .venv/bin/activate
 mailroom connections
 ```
 
-### `mailroom access`
+## `mailroom access`
 
 Reruns just the sender access policy flow using the current `.env`.
 
 Use this when:
+
 - you want to switch between `all` and `allowlist`
 - you want to update the approved sender list
-- you want to lock down the mailbox after an overly broad test
 
 ```bash
 source .venv/bin/activate
 mailroom access
 ```
 
-### `mailroom doctor`
+## `mailroom doctor`
 
 Checks:
+
 - Python version
 - `.env` and required env values
 - provider-specific prerequisites
 - core Python dependencies
-- optional helper commands such as `gcloud`, `gws`, and `sqlite3`
+- optional helper commands such as `gcloud` and `sqlite3`
 
-Provider-specific checks:
+Blocking checks include:
 
-| Provider | Blocking checks |
+| Area | Checks |
 |---|---|
-| `google_api` | `credentials.json`, `token.json`, OAuth client structure |
-| `gog` | `GOG_GMAIL_TOPIC`, `GOG_GMAIL_SUBSCRIPTION`, `GOG_GMAIL_PUSH_ENDPOINT`, hook tokens, `gog` on `PATH` |
+| mailbox mode | `MAIL_PROVIDER`, Gmail OAuth files for `google_api`, `gog` runtime vars for `gog` |
+| CX config | `ORDER_PROVIDER`, `KNOWLEDGE_PROVIDER`, `STORE_KNOWLEDGE_FILE`, plus provider-specific order config |
+| sender policy | `SENDER_POLICY_MODE`, `ALLOWED_SENDERS` when allowlist mode is used |
+| Python deps | `openai`, `fastapi`, `uvicorn` importability |
 
-Sender policy checks:
-- `SENDER_POLICY_MODE` must be `all` or `allowlist`
-- if `SENDER_POLICY_MODE=allowlist`, `ALLOWED_SENDERS` must be non-empty
+Order-provider specific checks:
+
+| `ORDER_PROVIDER` | Doctor checks |
+|---|---|
+| `manual` | `MANUAL_ORDER_FILE` exists |
+| `dutchie` | `DUTCHIE_LOCATION_KEY` and `DUTCHIE_API_BASE_URL` are set |
+| `custom` | `ORDER_PROVIDER_FACTORY` imports successfully |
 
 ```bash
 source .venv/bin/activate
 mailroom doctor
 ```
 
-### `mailroom auth`
+## `mailroom auth`
 
 Runs the Google OAuth browser flow using the current `.env` paths.
 
 Notes:
+
 - only used for `MAIL_PROVIDER=google_api`
 - returns immediately in `gog` mode
 
@@ -195,7 +203,7 @@ source .venv/bin/activate
 mailroom auth
 ```
 
-### `mailroom run`
+## `mailroom run`
 
 Starts the FastAPI app directly.
 
@@ -206,14 +214,12 @@ mailroom run --reload
 
 ## Direct App Invocation
 
-If you do not want to use `mailroom run`, the direct command is:
-
 ```bash
 source .venv/bin/activate
 uvicorn app.main:app --reload --port 8787
 ```
 
-## HTTP Operator Endpoints
+## HTTP Endpoints
 
 ### `GET /healthz`
 
@@ -222,21 +228,19 @@ curl http://127.0.0.1:8787/healthz
 ```
 
 Response fields:
+
 - `ok`
 - `agent_email`
 - `mail_provider`
 - `sender_policy_mode`
 - `allowed_senders_count`
 - `ingress_mode`
+- `order_provider`
+- `knowledge_provider`
 - `poll_seconds`
 - `worker_alive`
 - `watcher_alive`
 - `retry`
-
-Interpretation:
-- `ingress_mode=poll` means `google_api`
-- `ingress_mode=hook` means `gog`
-- `watcher_alive` is meaningful only in `gog` mode
 
 ### `POST /process-now`
 
@@ -247,6 +251,7 @@ curl -X POST http://127.0.0.1:8787/process-now
 ```
 
 Notes:
+
 - supported only in `google_api` mode
 - returns an error payload in `gog` mode
 
@@ -261,90 +266,48 @@ curl -X POST http://127.0.0.1:8787/hooks/gmail \
   -d '{
     "messages": [
       {
-        "id": "demo-1",
-        "threadId": "demo-thread",
+        "id": "test-1",
+        "threadId": "thread-1",
         "from": "human@example.com",
         "subject": "Hello",
-        "body": "Test message"
+        "body": "Can you check order 100100?"
       }
     ]
   }'
 ```
 
-Notes:
-- enabled only in `gog` mode
-- accepts either `Authorization: Bearer ...` or `X-Mailroom-Token`
-- queues background processing and returns `202`
-
 ### `GET /dead-letter`
 
-```bash
-curl http://127.0.0.1:8787/dead-letter
-```
+Returns dead-letter rows from SQLite.
 
-Returns recent dead-letter rows from SQLite.
+```bash
+curl "http://127.0.0.1:8787/dead-letter?limit=50"
+```
 
 ### `POST /dead-letter/requeue/{message_id}`
 
-Marks a dead-letter item as `requeued`, removes its processed-message dedupe row, and optionally reprocesses it immediately.
+Marks a dead-letter row as `requeued`, removes its processed-message dedupe row, and optionally reprocesses it immediately.
 
 ```bash
 curl -X POST "http://127.0.0.1:8787/dead-letter/requeue/<message_id>?process_now=true"
 ```
 
-Notes:
-- immediate processing is most useful in `google_api` mode
-- in `gog` mode, replay still depends on a cached `inbound_messages` snapshot because the provider does not refetch by ID
+## Core Environment Variables
 
-## Practical Recipes
-
-### Simplest Local Email Test
-
-```bash
-make setup
-source .venv/bin/activate
-mailroom setup
-mailroom doctor
-mailroom run --reload
-```
-
-Choose `MAIL_PROVIDER=google_api` during setup, then:
-
-```bash
-curl http://127.0.0.1:8787/healthz
-```
-
-Send an email from a different mailbox to `AGENT_EMAIL`.
-
-### Switch To `gog` Mode
-
-```bash
-source .venv/bin/activate
-mailroom connections
-mailroom doctor
-mailroom run --reload
-```
-
-Use this only after you have:
-- `gog` installed and authenticated
-- one deployer-owned GCP project and Pub/Sub topic
-- a public HTTPS push endpoint that forwards to the local watcher
-
-### Replay A Failed Message
-
-```bash
-curl http://127.0.0.1:8787/dead-letter
-curl -X POST "http://127.0.0.1:8787/dead-letter/requeue/<message_id>?process_now=true"
-```
-
-## Troubleshooting By Command
-
-| Command | Symptom | Likely cause | Response |
-|---|---|---|---|
-| `mailroom setup` | email prompt keeps rejecting input | invalid address entered | enter a real email address such as `agent@example.com` |
-| `mailroom setup` | stops at credentials step | `google_api` mode with missing OAuth client | finish the wizard’s `credentials.json` flow |
-| `mailroom connections` | asks for GCP topic info | `gog` mode selected | this mode needs one deployer-owned GCP project for Gmail Pub/Sub |
-| `mailroom doctor` | reports missing `GOG_GMAIL_PUSH_ENDPOINT` | `gog` ingress is not routable yet | configure a public HTTPS push path |
-| `mailroom auth` | exits immediately | current provider is `gog` | this is expected; `mailroom auth` is only for `google_api` |
-| `make run` | app crashes at startup | missing env var, bad token, missing `gog`, or invalid watcher config | inspect console output and rerun `mailroom doctor` |
-| `POST /process-now` | returns unsupported error | app is in `gog` mode | use real Gmail hook delivery or test `/hooks/gmail` directly |
+| Variable | Purpose |
+|---|---|
+| `MAIL_PROVIDER` | selects `google_api` or `gog` |
+| `AGENT_EMAIL` | mailbox address used by the runtime |
+| `SENDER_POLICY_MODE` | `all` or `allowlist` |
+| `ALLOWED_SENDERS` | sender allowlist when allowlist mode is used |
+| `ORDER_PROVIDER` | `manual`, `dutchie`, or `custom` |
+| `ORDER_PROVIDER_FACTORY` | custom Python factory path for custom order providers |
+| `KNOWLEDGE_PROVIDER` | currently `manual` only |
+| `STORE_KNOWLEDGE_FILE` | path to the store knowledge JSON file |
+| `MANUAL_ORDER_FILE` | path to the manual orders JSON file |
+| `DUTCHIE_LOCATION_KEY` | Dutchie location key for the built-in Dutchie adapter |
+| `DUTCHIE_INTEGRATOR_KEY` | optional Dutchie integrator key |
+| `DUTCHIE_API_BASE_URL` | Dutchie API base URL |
+| `GOOGLE_CREDENTIALS_FILE` | desktop OAuth client JSON for `google_api` mode |
+| `GOOGLE_TOKEN_FILE` | Gmail OAuth token file for `google_api` mode |
+| `SYSTEM_PROMPT_FILE` | prompt file loaded at startup |

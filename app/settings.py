@@ -12,6 +12,20 @@ def normalize_sender_policy_mode(raw_value: str | None) -> str:
     return "all"
 
 
+def normalize_order_provider(raw_value: str | None) -> str:
+    candidate = (raw_value or "manual").strip().lower()
+    if candidate in {"manual", "dutchie", "custom"}:
+        return candidate
+    return "manual"
+
+
+def normalize_knowledge_provider(raw_value: str | None) -> str:
+    candidate = (raw_value or "manual").strip().lower()
+    if candidate == "manual":
+        return candidate
+    return "manual"
+
+
 def parse_csv_emails(raw_value: str | None) -> tuple[str, ...]:
     seen: set[str] = set()
     ordered: list[str] = []
@@ -36,7 +50,14 @@ class Settings:
     state_db: str = os.getenv("STATE_DB", "./state.db")
     google_token_file: str = os.getenv("GOOGLE_TOKEN_FILE", "./token.json")
     google_credentials_file: str = os.getenv("GOOGLE_CREDENTIALS_FILE", "./credentials.json")
-    google_drive_default_folder_id: str = os.getenv("GOOGLE_DRIVE_DEFAULT_FOLDER_ID", "")
+    order_provider: str = normalize_order_provider(os.getenv("ORDER_PROVIDER", "manual"))
+    order_provider_factory: str = os.getenv("ORDER_PROVIDER_FACTORY", "")
+    knowledge_provider: str = normalize_knowledge_provider(os.getenv("KNOWLEDGE_PROVIDER", "manual"))
+    store_knowledge_file: str = os.getenv("STORE_KNOWLEDGE_FILE", "./examples/store_knowledge.sample.json")
+    manual_order_file: str = os.getenv("MANUAL_ORDER_FILE", "./examples/manual_orders.sample.json")
+    dutchie_location_key: str = os.getenv("DUTCHIE_LOCATION_KEY", "") or os.getenv("DUTCHIE_API_KEY", "")
+    dutchie_integrator_key: str = os.getenv("DUTCHIE_INTEGRATOR_KEY", "")
+    dutchie_api_base_url: str = os.getenv("DUTCHIE_API_BASE_URL", "https://api.pos.dutchie.com")
     system_prompt_file: str = os.getenv("SYSTEM_PROMPT_FILE", "./SYSTEM_PROMPT.md")
     gog_account: str = os.getenv("GOG_ACCOUNT", "")
     gog_gmail_topic: str = os.getenv("GOG_GMAIL_TOPIC", "")

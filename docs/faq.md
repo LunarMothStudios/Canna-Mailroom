@@ -1,112 +1,78 @@
 # FAQ
 
-_Last verified against commit `b6c46e6`._
+## What problem does this project solve?
 
-## For Stakeholders
+It provides an email-native customer-service agent for dispensaries. The agent can track one email thread at a time, answer store-owned policy questions, and check order status through a pluggable provider layer.
 
-### What problem does this project solve?
+## Is it Dutchie-specific?
 
-It demonstrates an email-native AI agent that can hold a threaded conversation over email and reply from a dedicated mailbox without requiring a separate chat UI.
+No. The public tool contracts are provider-agnostic:
 
-### What is the main value of this architecture?
+- `lookup_order`
+- `search_store_knowledge`
 
-It keeps the agent as the main primitive. Email is just the harness around it, so the same core worker and agent can sit behind different mailbox transports.
+Dutchie is only the first built-in live order adapter. The core runtime can also use manual JSON files or a custom Python order provider.
 
-### Is it production-ready?
+## What tools are exposed to the model?
 
-Not yet. It has real retries, dead-letter handling, two ingress modes, and a simple sender allowlist, but it still lacks approval gates, richer policy controls, and automated behavioral tests.
+Exactly two:
 
-### What are the biggest current boundaries?
+- `lookup_order`
+- `search_store_knowledge`
 
-- one mailbox
-- one active runtime instance
-- no manual approval before outbound send
-- Drive and Docs only in `google_api` mode
+There is no model-callable Gmail access, web search, or order mutation.
 
-## For Operators
+## What is the difference between `google_api` and `gog`?
 
-### Do I need everything we discussed just to see one reply work?
+- `google_api` polls Gmail directly through the Gmail API.
+- `gog` uses `gog` for Gmail watch/send and receives messages through `POST /hooks/gmail`.
 
-No. The smallest path is `MAIL_PROVIDER=google_api`, one dedicated mailbox, one-time Google auth, then `mailroom run`.
+The CX tool surface is the same in both modes.
 
-### Why does setup feel large?
+## Can I use this without a vendor integration?
 
-Because there are really three separate concerns:
-- basic local mailbox testing
-- server-style hook ingress
-- future product onboarding for user-owned inboxes
+Yes.
 
-The repo supports pieces of all three, but you usually need only one path at a time.
+- Use `ORDER_PROVIDER=manual` with `MANUAL_ORDER_FILE`
+- Use `KNOWLEDGE_PROVIDER=manual` with `STORE_KNOWLEDGE_FILE`
 
-### What is the difference between `google_api` and `gog`?
+That is the default local-development path.
 
-- `google_api` polls Gmail directly and also enables Drive and Docs tools.
-- `gog` uses `gog` for Gmail watch and send, receives messages through `/hooks/gmail`, and is email-only plus `research_web`.
-
-### Why does `gog` still ask for GCP topic information?
-
-Because the current `gog` path uses Gmail watch plus Pub/Sub. End users do not need their own Google Cloud setup, but the deployment still needs one GCP project and topic for the watcher.
-
-### Can I stop it from replying to everyone?
+## Can I plug in my own order system?
 
 Yes. Set:
-- `SENDER_POLICY_MODE=allowlist`
-- `ALLOWED_SENDERS=person1@example.com,person2@example.com`
 
-Then restart the app. Only those senders will get replies.
+```bash
+ORDER_PROVIDER=custom
+ORDER_PROVIDER_FACTORY=your_module:build_provider
+```
 
-You can do this without editing `.env` directly:
-- `mailroom access`
-- or `make access`
+The factory should return an object with a `lookup(...)` method matching the built-in contract.
 
-### Does `/process-now` always work?
+## Does the model have direct Gmail access?
 
-No. It is only supported in `google_api` polling mode. In `gog` mode, use real Gmail hook delivery or test `/hooks/gmail` directly.
+No. Gmail transport stays application-owned. The model only sees normalized email text and can call the application-defined tool list.
 
-### What happens if I delete `state.db`?
+## Can the agent cancel or edit orders?
+
+No. The current runtime is read-only for customer operations.
+
+## Can the agent answer all policy questions by itself?
+
+Only if the answer exists in the configured store knowledge file. The runtime intentionally avoids live web search for customer replies because store policy and compliance details should come from store-owned data.
+
+## What happens if I delete `state.db`?
 
 You lose:
+
 - thread continuity
 - processed-message dedupe history
 - dead-letter records
 - outbound send-tracking metadata
 - cached inbound message snapshots
 
-The app can recreate the schema, but it starts cold.
+The schema will be recreated on startup, but the runtime starts cold.
 
-### Can I replay a failed message?
+## Can I replay a failed message?
 
 Yes. Use `POST /dead-letter/requeue/{message_id}`. In `gog` mode, replay depends on a cached `inbound_messages` snapshot because that provider does not refetch by ID.
-
-## For Developers
-
-### Does the model have direct Gmail access?
-
-No. Gmail transport stays application-owned. The model only sees normalized email text and can call the application-defined tool list.
-
-### What tools are exposed to the model?
-
-Always:
-- `research_web`
-
-Only in `google_api` mode:
-- `list_drive_files`
-- `create_google_doc`
-- `append_google_doc`
-- `read_google_doc`
-
-### Why is there an `inbound_messages` table now?
-
-It keeps a normalized inbound snapshot available for retries, hook processing, and requeue. That is especially important in `gog` mode, where the provider does not refetch by message ID.
-
-### Does the app parse HTML-heavy emails or attachments?
-
-Not robustly. The worker is plain-text-first and does not implement attachment handling.
-
-### Does the prompt reload automatically if I edit `SYSTEM_PROMPT.md`?
-
-No. The prompt file is read when `EmailAgent` is constructed at startup. Restart the app after changing it.
-
-### Can I run multiple instances against the same mailbox?
-
-That is not supported safely today. There is no distributed lock or shared coordination mechanism.

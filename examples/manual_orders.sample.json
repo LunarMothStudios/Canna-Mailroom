@@ -1,0 +1,35 @@
+{
+  "orders": [
+    {
+      "order_number": "100100",
+      "customer_email": "alex@example.com",
+      "phone_last4": "4242",
+      "status": "Ready for pickup",
+      "fulfillment_type": "Pickup",
+      "location_id": "downtown",
+      "location_name": "Downtown",
+      "ordered_at": "2026-03-14T15:10:00Z",
+      "ready_window": "Ready now until store close today.",
+      "payment_summary": "Estimated total: $48.75. Pay in store at pickup.",
+      "notes": [
+        "Bring a valid government-issued photo ID.",
+        "Please wait for the ready notification before arriving."
+      ]
+    },
+    {
+      "order_number": "100200",
+      "customer_email": "sam@example.com",
+      "phone_last4": "1313",
+      "status": "Submitted",
+      "fulfillment_type": "Delivery",
+      "location_id": "northside",
+      "location_name": "Northside",
+      "ordered_at": "2026-03-14T16:00:00Z",
+      "scheduled_window": "Delivery window: 2:00 PM - 5:00 PM local time.",
+      "payment_summary": "Estimated total: $72.10. Final payment is collected by the store per local policy.",
+      "notes": [
+        "Delivery timing can shift based on routing and compliance review."
+      ]
+    }
+  ]
+}

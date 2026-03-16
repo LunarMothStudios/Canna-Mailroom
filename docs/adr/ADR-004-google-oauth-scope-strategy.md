@@ -1,16 +1,15 @@
 # ADR-004: Use Broad Google OAuth Scopes For The MVP
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-03-11
-- Last verified against commit `b6c46e6`
 
 ## Context
 
-The agent must read and send Gmail, list Drive files, and create, append, and read Google Docs. The fastest path is to request scopes broad enough to avoid permission friction during MVP validation.
+This ADR captured the earlier Google Workspace tool phase of the project, when the runtime exposed Drive and Docs actions directly to the model. The current provider-agnostic CX runtime no longer does that.
 
 ## Decision
 
-Request these scopes:
+The historical MVP requested these scopes:
 
 - `https://mail.google.com/`
 - `https://www.googleapis.com/auth/drive`
@@ -28,7 +27,7 @@ Negative:
 
 ## Follow-Up
 
-Reduce scopes and add stronger policy controls before wider deployment.
+This follow-up has now been implemented for the active runtime. `app/google_clients.py` uses only `https://mail.google.com/`.
 
 ## Evidence In Code
 

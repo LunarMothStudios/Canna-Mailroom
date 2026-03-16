@@ -1,7 +1,7 @@
 [project]
 name = "canna-mailroom"
 version = "0.1.0"
-description = "Email-native AI agent with Gmail + Drive + Docs tool use"
+description = "Email-native dispensary CX agent runtime with pluggable order and knowledge providers"
 requires-python = ">=3.11"
 dependencies = [
   "openai>=1.108.1",

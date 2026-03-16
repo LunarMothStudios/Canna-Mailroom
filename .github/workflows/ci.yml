@@ -25,3 +25,7 @@ jobs:
       - name: Compile check
         run: |
           python -m compileall app scripts
+
+      - name: Unit tests
+        run: |
+          python -m unittest discover -s tests

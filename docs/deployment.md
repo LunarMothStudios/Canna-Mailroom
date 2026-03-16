@@ -1,7 +1,5 @@
 # Deployment Guide
 
-_Last verified against commit `b6c46e6`._
-
 This guide covers deployment options that fit the current codebase. The runtime is a single FastAPI process with one selected mailbox provider and one local SQLite state file.
 
 ## Deployment Fit Summary
@@ -23,7 +21,7 @@ flowchart LR
     App --> DB["state.db"]
     App --> Poll["google_api poll loop"]
     App --> Hook["gog watcher and /hooks/gmail"]
-    Poll --> Drive["Drive/Docs APIs"]
+    App --> Providers["OrderProvider and KnowledgeProvider"]
 ```
 
 ## Files That Must Exist Or Persist
@@ -33,12 +31,16 @@ flowchart LR
 | `.env` | runtime configuration | all modes |
 | `state.db` | runtime state | all modes |
 | `SYSTEM_PROMPT.md` | agent instructions | all modes |
+| `STORE_KNOWLEDGE_FILE` target | store-owned FAQ and policy data | all modes |
 | `credentials.json` | Google OAuth desktop client | `google_api` only |
 | `token.json` | Google access and refresh token | `google_api` only |
+| `MANUAL_ORDER_FILE` target | manual order lookup data | when `ORDER_PROVIDER=manual` |
+| custom provider module code | custom order adapter implementation | when `ORDER_PROVIDER=custom` |
 
 Important note:
 - In `gog` mode, Mailroom does not use `credentials.json` or `token.json`.
 - `gog` still manages its own Google auth material outside this repo.
+- In `dutchie` mode, Dutchie credentials still live in `.env`.
 
 ## Local Deployment
 
@@ -111,7 +113,7 @@ WantedBy=multi-user.target
 ```
 
 Operational notes:
-- persist `.env`, `state.db`, and `SYSTEM_PROMPT.md`
+- persist `.env`, `state.db`, `SYSTEM_PROMPT.md`, and the configured knowledge/order files
 - also persist `credentials.json` and `token.json` in `google_api` mode
 - run exactly one instance for the mailbox
 - keep the HTTP port private or place it behind a reverse proxy
@@ -122,7 +124,7 @@ Operational notes:
 
 Best when:
 - you want the shortest path to a working mailbox
-- you want Drive and Docs tools
+- you want the simplest local mailbox harness
 - local polling is acceptable
 
 Operational requirements:

@@ -4,12 +4,13 @@ import threading
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 
 from app.settings import settings
-from app.google_clients import get_credentials, get_docs_service, get_drive_service, get_gmail_service
+from app.google_clients import get_credentials, get_gmail_service
 from app.gog_mailbox import GogMailboxProvider
 from app.gog_watcher import GogGmailWatcherManager, GogWatcherConfig
 from app.google_mailbox import GoogleApiMailboxProvider
-from app.tools import GoogleWorkspaceTools
 from app.ai_agent import EmailAgent
+from app.cx_providers import load_knowledge_provider, load_order_provider
+from app.cx_toolset import DispensaryCxToolset
 from app.mailbox import MailboxMessage
 from app.state import StateStore
 from app.gmail_worker import EmailThreadWorker
@@ -67,21 +68,16 @@ def _validate_hook_token(authorization: str | None, x_mailroom_token: str | None
 def startup():
     global watcher, worker_thread, worker
     state = StateStore(settings.state_db)
+    order_provider = load_order_provider(settings)
+    knowledge_provider = load_knowledge_provider(settings)
+    toolset = DispensaryCxToolset(order_provider=order_provider, knowledge_provider=knowledge_provider)
 
     if settings.mail_provider == "google_api":
         creds = get_credentials(settings.google_token_file, settings.google_credentials_file)
         gmail = get_gmail_service(creds)
-        drive = get_drive_service(creds)
-        docs = get_docs_service(creds)
         mailbox = GoogleApiMailboxProvider(gmail_service=gmail)
-        tools = GoogleWorkspaceTools(
-            drive=drive,
-            docs=docs,
-            default_folder_id=settings.google_drive_default_folder_id,
-        )
     elif settings.mail_provider == "gog":
         mailbox = GogMailboxProvider(account=settings.gog_account or settings.agent_email)
-        tools = None
         watcher = GogGmailWatcherManager(
             GogWatcherConfig(
                 account=settings.gog_account or settings.agent_email,
@@ -105,7 +101,7 @@ def startup():
     agent = EmailAgent(
         api_key=settings.openai_api_key,
         model=settings.openai_model,
-        tools=tools,
+        toolset=toolset,
         system_prompt_path=settings.system_prompt_file,
     )
 
@@ -150,6 +146,8 @@ def healthz():
         "sender_policy_mode": settings.sender_policy_mode,
         "allowed_senders_count": len(settings.allowed_senders),
         "ingress_mode": "poll" if settings.mail_provider == "google_api" else "hook",
+        "order_provider": settings.order_provider,
+        "knowledge_provider": settings.knowledge_provider,
         "poll_seconds": settings.poll_seconds,
         "worker_alive": bool(worker_thread and worker_thread.is_alive()) or settings.mail_provider == "gog",
         "watcher_alive": watcher.is_running() if watcher else None,
