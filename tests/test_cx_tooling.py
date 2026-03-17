@@ -72,23 +72,6 @@ class ProviderLoadingTests(unittest.TestCase):
         path.write_text(json.dumps(payload))
         return str(path)
 
-    def make_treez_private_key_file(self) -> str:
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import rsa
-
-        temp_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(temp_dir.cleanup)
-        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        path = Path(temp_dir.name) / "treez-private.pem"
-        path.write_bytes(
-            key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization.NoEncryption(),
-            )
-        )
-        return str(path)
-
     def test_load_manual_providers(self):
         settings = SimpleNamespace(
             order_provider="manual",
@@ -133,10 +116,9 @@ class ProviderLoadingTests(unittest.TestCase):
         settings = SimpleNamespace(
             order_provider="treez",
             treez_dispensary="downtown-cannabis",
-            treez_organization_id="org-123",
-            treez_certificate_id="cert-abc",
-            treez_private_key_file=self.make_treez_private_key_file(),
-            treez_api_base_url="https://api-prod.treez.io",
+            treez_client_id="client-123",
+            treez_api_key="api-key",
+            treez_api_base_url="https://api.treez.io",
         )
 
         provider = load_order_provider(settings)

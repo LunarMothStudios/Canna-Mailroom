@@ -91,22 +91,6 @@ class ProviderFixtureMixin:
         path.write_text(json.dumps(payload))
         return str(path)
 
-    def make_treez_private_key_file(self) -> str:
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import rsa
-
-        temp_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(temp_dir.cleanup)
-        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        private_key_bytes = key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption(),
-        )
-        path = Path(temp_dir.name) / "treez-private.pem"
-        path.write_bytes(private_key_bytes)
-        return str(path)
-
 
 class ManualKnowledgeProviderTests(ProviderFixtureMixin, unittest.TestCase):
     def test_exact_location_match_returns_hours_answer(self):
@@ -259,6 +243,13 @@ class BridgeOrderProviderTests(unittest.TestCase):
         self.assertEqual(payload["source"], "bridge")
         self.assertEqual(payload["order_status"], "Ready")
 
+    def test_bridge_payload_without_explicit_found_status_is_rejected(self):
+        provider = BridgeOrderProvider("https://bridge.example.com/orders", source="bridge")
+
+        with patch("app.cx_providers._request_json_url", return_value={"order_number": "B100"}):
+            with self.assertRaises(ProviderAPIError):
+                provider.lookup("B100")
+
     def test_bridge_404_maps_to_not_found(self):
         provider = BridgeOrderProvider("https://bridge.example.com/orders", source="bridge")
 
@@ -285,63 +276,81 @@ class JaneOrderProviderTests(unittest.TestCase):
         self.assertEqual(result.to_tool_output()["source"], "jane")
 
 
-class TreezOrderProviderTests(ProviderFixtureMixin, unittest.TestCase):
+class TreezOrderProviderTests(unittest.TestCase):
     def make_provider(self) -> TreezOrderProvider:
         return TreezOrderProvider(
             dispensary="downtown-cannabis",
-            organization_id="org-123",
-            certificate_id="cert-abc",
-            private_key_file=self.make_treez_private_key_file(),
+            client_id="client-123",
+            api_key="api-key",
         )
 
-    def test_auth_header_is_signed(self):
+    def test_lookup_fetches_access_token_and_calls_v2_ticket_endpoint(self):
         provider = self.make_provider()
 
-        header = provider._build_auth_header("https://api-prod.treez.io/dispensary/v3/downtown-cannabis/ticket/ordernumber/1001")
-
-        self.assertEqual(len(header.split(".")), 2)
-
-    def test_successful_lookup_maps_treez_ticket(self):
-        provider = self.make_provider()
-        provider._request_json = Mock(
-            return_value={
-                "resultCode": "SUCCESS",
-                "data": {
-                    "order_number": "1001",
-                    "order_status": "ready_for_pickup",
-                    "type": "pickup",
-                    "location_name": "Downtown",
-                    "date_created": "2026-03-14T15:10:00Z",
-                    "scheduled_date": "2026-03-14T16:00:00Z",
-                    "payment_status": "unpaid",
-                    "total": 87.5,
-                    "ticket_note": "Bring a government-issued photo ID.",
-                    "customer_email": "alex@example.com",
-                    "phone": "(555) 555-4242",
+        with patch(
+            "app.cx_providers._request_json_path",
+            side_effect=[
+                {"access_token": "treez-token", "expires_in": 7200},
+                {
+                    "resultCode": "SUCCESS",
+                    "data": {
+                        "order_number": "1001",
+                        "order_status": "ready_for_pickup",
+                        "type": "pickup",
+                        "location_name": "Downtown",
+                        "date_created": "2026-03-14T15:10:00Z",
+                        "scheduled_date": "2026-03-14T16:00:00Z",
+                        "payment_status": "unpaid",
+                        "total": 87.5,
+                        "ticket_note": "Bring a government-issued photo ID.",
+                        "customer_email": "alex@example.com",
+                        "phone": "(555) 555-4242",
+                    },
                 },
-            }
-        )
-
-        result = provider.lookup("1001", customer_email="alex@example.com", phone_last4="4242")
+            ],
+        ) as request_mock:
+            result = provider.lookup("1001", customer_email="alex@example.com", phone_last4="4242")
 
         payload = result.to_tool_output()
         self.assertEqual(payload["status"], "found")
         self.assertEqual(payload["source"], "treez")
         self.assertIn("unpaid", payload["payment_summary"])
         self.assertIn("Matched the sender email", payload["verification_summary"])
+        self.assertEqual(request_mock.call_args_list[0].args, ("https://api.treez.io", "/auth/v1/config/api/gettokens"))
+        self.assertEqual(request_mock.call_args_list[0].kwargs["method"], "POST")
+        self.assertEqual(
+            request_mock.call_args_list[0].kwargs["body"],
+            {"client_id": "client-123", "api_key": "api-key"},
+        )
+        self.assertEqual(
+            request_mock.call_args_list[1].args,
+            ("https://api.treez.io", "/v2.0/dispensary/downtown-cannabis/ticket/ordernumber/1001"),
+        )
+        self.assertEqual(
+            request_mock.call_args_list[1].kwargs["headers"]["Authorization"],
+            "Bearer treez-token",
+        )
 
     def test_lookup_returns_not_found_for_404(self):
         provider = self.make_provider()
-        provider._request_json = Mock(side_effect=ProviderAPIError("missing", status_code=404))
 
-        result = provider.lookup("missing")
+        def side_effect(base_url, path, **kwargs):
+            if path == "/auth/v1/config/api/gettokens":
+                return {"access_token": "treez-token"}
+            raise ProviderAPIError("missing", status_code=404)
+
+        with patch("app.cx_providers._request_json_path", side_effect=side_effect):
+            result = provider.lookup("missing")
 
         self.assertEqual(result.to_tool_output()["status"], "not_found")
 
     def test_lookup_returns_identity_mismatch_for_email_conflict(self):
         provider = self.make_provider()
-        provider._request_json = Mock(
-            return_value={
+
+        def side_effect(base_url, path, **kwargs):
+            if path == "/auth/v1/config/api/gettokens":
+                return {"access_token": "treez-token"}
+            return {
                 "resultCode": "SUCCESS",
                 "data": {
                     "order_number": "1001",
@@ -349,8 +358,8 @@ class TreezOrderProviderTests(ProviderFixtureMixin, unittest.TestCase):
                     "customer_email": "someoneelse@example.com",
                 },
             }
-        )
 
-        result = provider.lookup("1001", customer_email="alex@example.com")
+        with patch("app.cx_providers._request_json_path", side_effect=side_effect):
+            result = provider.lookup("1001", customer_email="alex@example.com")
 
         self.assertEqual(result.to_tool_output()["status"], "identity_mismatch")

@@ -5,7 +5,6 @@ import importlib
 import json
 import re
 import time
-import uuid
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 from urllib import error, parse, request
@@ -147,6 +146,8 @@ def _coerce_bridge_order_outcome(payload: Any, *, source: str):
 
     result_status = str(payload.get("status") or "").strip().lower()
     payload_source = str(payload.get("source") or source).strip() or source
+    if result_status not in {"found", "not_found", "identity_mismatch"}:
+        raise ProviderAPIError("Bridge order provider must return an explicit status.", status_code=502)
     if result_status == "not_found":
         return OrderNotFound(
             order_number=str(payload.get("order_number") or "").strip(),
@@ -160,12 +161,18 @@ def _coerce_bridge_order_outcome(payload: Any, *, source: str):
             verification_summary=str(payload.get("verification_summary") or "The bridge provider could not verify the sender."),
             source=payload_source,
         )
-    if result_status not in {"", "found"} and "order_status" not in payload and "order_number" not in payload:
-        raise ProviderAPIError("Bridge order provider returned an unsupported status payload.", status_code=502)
+
+    order_number = str(payload.get("order_number") or "").strip()
+    order_status = str(payload.get("order_status") or payload.get("status_label") or "").strip()
+    if not order_number or not order_status:
+        raise ProviderAPIError(
+            "Bridge order provider returned a found status without order_number and order_status.",
+            status_code=502,
+        )
 
     return OrderLookupResult(
-        order_number=str(payload.get("order_number") or "").strip(),
-        order_status=str(payload.get("order_status") or payload.get("status_label") or payload.get("status") or "Unknown"),
+        order_number=order_number,
+        order_status=order_status,
         fulfillment_type=str(payload.get("fulfillment_type") or "").strip() or None,
         location_name=str(payload.get("location_name") or "").strip() or None,
         location_id=str(payload.get("location_id") or "").strip() or None,
@@ -189,6 +196,30 @@ def _pick_first_mapping(payload: Any) -> dict[str, Any] | None:
     if isinstance(payload, list) and payload and isinstance(payload[0], dict):
         return payload[0]
     return None
+
+
+def _extract_token_payload(payload: Any) -> tuple[str, int | None]:
+    if not isinstance(payload, dict):
+        raise ProviderAPIError("Treez auth returned an unexpected payload.", status_code=502)
+
+    candidates = [payload]
+    if isinstance(payload.get("data"), dict):
+        candidates.append(payload["data"])
+    if isinstance(payload.get("result"), dict):
+        candidates.append(payload["result"])
+
+    for candidate in candidates:
+        for key in ("access_token", "accessToken", "token"):
+            token = str(candidate.get(key) or "").strip()
+            if token:
+                expires_raw = candidate.get("expires_in") or candidate.get("expiresIn")
+                try:
+                    expires_in = int(expires_raw) if expires_raw not in {None, ""} else None
+                except (TypeError, ValueError):
+                    expires_in = None
+                return token, expires_in
+
+    raise ProviderAPIError("Treez auth response did not include an access token.", status_code=502)
 
 
 def _topic_keywords() -> dict[str, tuple[str, ...]]:
@@ -848,82 +879,74 @@ class TreezOrderProvider(OrderProvider):
     def __init__(
         self,
         dispensary: str,
-        organization_id: str,
-        certificate_id: str,
-        private_key_file: str,
-        base_url: str = "https://api-prod.treez.io",
+        client_id: str,
+        api_key: str,
+        base_url: str = "https://api.treez.io",
     ):
         self.dispensary = dispensary.strip()
-        self.organization_id = organization_id.strip()
-        self.certificate_id = certificate_id.strip()
-        self.private_key_file = Path(private_key_file).expanduser()
+        self.client_id = client_id.strip()
+        self.api_key = api_key.strip()
         self.base_url = base_url.rstrip("/")
         if not self.dispensary:
             raise ProviderConfigurationError("TREEZ_DISPENSARY is required when ORDER_PROVIDER=treez.")
-        if not self.organization_id:
-            raise ProviderConfigurationError("TREEZ_ORGANIZATION_ID is required when ORDER_PROVIDER=treez.")
-        if not self.certificate_id:
-            raise ProviderConfigurationError("TREEZ_CERTIFICATE_ID is required when ORDER_PROVIDER=treez.")
-        if not self.private_key_file.exists():
-            raise ProviderConfigurationError(f"Missing TREEZ_PRIVATE_KEY_FILE: {self.private_key_file}")
-        self._private_key: Any | None = None
+        if not self.client_id:
+            raise ProviderConfigurationError("TREEZ_CLIENT_ID is required when ORDER_PROVIDER=treez.")
+        if not self.api_key:
+            raise ProviderConfigurationError("TREEZ_API_KEY is required when ORDER_PROVIDER=treez.")
+        self._access_token: str | None = None
+        self._access_token_expires_at: float = 0.0
 
-    def _load_private_key(self):
-        if self._private_key is None:
-            try:
-                from cryptography.hazmat.primitives import serialization
-            except ImportError as err:
-                raise ProviderConfigurationError("cryptography is required for the built-in Treez connector.") from err
-
-            try:
-                self._private_key = serialization.load_pem_private_key(self.private_key_file.read_bytes(), password=None)
-            except ValueError as err:
-                raise ProviderConfigurationError(f"Invalid Treez private key file: {self.private_key_file}") from err
-        return self._private_key
-
-    def _base_headers(self, url: str) -> dict[str, str]:
+    def _auth_request_body(self) -> dict[str, str]:
         return {
-            "Accept": "application/json",
-            "Authorization": self._build_auth_header(url),
+            "client_id": self.client_id,
+            "api_key": self.api_key,
         }
 
-    def _build_auth_header(self, audience_url: str) -> str:
-        private_key = self._load_private_key()
-        now_ms = int(time.time() * 1000)
-        signed_header = {
-            "aud": audience_url,
-            "iss": self.certificate_id,
-            "oid": self.organization_id,
-            "iat": now_ms,
-            "exp": now_ms + 30000,
-            "jti": str(uuid.uuid4()),
-        }
-        encoded_header = base64.urlsafe_b64encode(
-            json.dumps(signed_header, separators=(",", ":")).encode("utf-8")
-        ).decode("ascii").rstrip("=")
-        try:
-            from cryptography.hazmat.primitives import hashes
-            from cryptography.hazmat.primitives.asymmetric import padding
-        except ImportError as err:
-            raise ProviderConfigurationError("cryptography is required for the built-in Treez connector.") from err
-
-        signature = private_key.sign(
-            encoded_header.encode("utf-8"),
-            padding.PKCS1v15(),
-            hashes.SHA256(),
+    def _fetch_access_token(self) -> tuple[str, int | None]:
+        payload = _request_json_path(
+            self.base_url,
+            "/auth/v1/config/api/gettokens",
+            method="POST",
+            headers={"Accept": "application/json"},
+            body=self._auth_request_body(),
         )
-        encoded_signature = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
-        return f"{encoded_header}.{encoded_signature}"
+        return _extract_token_payload(payload)
 
-    def _request_json(self, method: str, path: str, *, query: dict[str, Any] | None = None) -> Any:
-        normalized_path = path if path.startswith("/") else f"/{path}"
-        base_path = f"/dispensary/v3/{parse.quote(self.dispensary)}{normalized_path}"
-        audience_url = f"{self.base_url}{base_path}"
-        if query:
-            query_string = parse.urlencode({key: value for key, value in query.items() if value is not None})
-            if query_string:
-                audience_url = f"{audience_url}?{query_string}"
-        return _request_json_url("GET", audience_url, headers=self._base_headers(audience_url))
+    def _get_access_token(self, *, force_refresh: bool = False) -> str:
+        now = time.time()
+        if not force_refresh and self._access_token and now < self._access_token_expires_at:
+            return self._access_token
+
+        token, expires_in = self._fetch_access_token()
+        ttl_seconds = expires_in if expires_in and expires_in > 0 else 7200
+        self._access_token = token
+        self._access_token_expires_at = now + max(1, ttl_seconds - 60)
+        return token
+
+    def _request_ticket(self, path: str) -> Any:
+        last_error: ProviderAPIError | None = None
+        for attempt in range(2):
+            token = self._get_access_token(force_refresh=attempt > 0)
+            try:
+                return _request_json_path(
+                    self.base_url,
+                    path,
+                    method="GET",
+                    headers={
+                        "Accept": "application/json",
+                        "Authorization": f"Bearer {token}",
+                    },
+                )
+            except ProviderAPIError as err:
+                last_error = err
+                if err.status_code == 401 and attempt == 0:
+                    self._access_token = None
+                    self._access_token_expires_at = 0.0
+                    continue
+                raise
+        if last_error is not None:
+            raise last_error
+        raise ProviderAPIError("Treez ticket request failed before any response was returned.", status_code=503)
 
     def _extract_verification_summary(
         self,
@@ -976,7 +999,7 @@ class TreezOrderProvider(OrderProvider):
             return OrderNotFound(order_number="", follow_up="Please share the order number you want me to check.", source="treez")
 
         try:
-            payload = self._request_json("GET", f"/ticket/ordernumber/{parse.quote(clean_order_number)}")
+            payload = self._request_ticket(f"/v2.0/dispensary/{parse.quote(self.dispensary)}/ticket/ordernumber/{parse.quote(clean_order_number)}")
         except ProviderAPIError as err:
             if err.status_code == 404:
                 return OrderNotFound(
@@ -1102,9 +1125,8 @@ def load_order_provider(settings: Settings) -> OrderProvider:
     if settings.order_provider == "treez":
         return TreezOrderProvider(
             dispensary=settings.treez_dispensary,
-            organization_id=settings.treez_organization_id,
-            certificate_id=settings.treez_certificate_id,
-            private_key_file=settings.treez_private_key_file,
+            client_id=settings.treez_client_id,
+            api_key=settings.treez_api_key,
             base_url=settings.treez_api_base_url,
         )
     if settings.order_provider == "jane":

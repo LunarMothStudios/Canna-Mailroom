@@ -182,7 +182,7 @@ Order-provider specific checks:
 |---|---|
 | `manual` | `MANUAL_ORDER_FILE` exists |
 | `dutchie` | `DUTCHIE_LOCATION_KEY` and `DUTCHIE_API_BASE_URL` are set |
-| `treez` | `TREEZ_DISPENSARY`, `TREEZ_ORGANIZATION_ID`, `TREEZ_CERTIFICATE_ID`, `TREEZ_PRIVATE_KEY_FILE`, and `TREEZ_API_BASE_URL` are set |
+| `treez` | `TREEZ_DISPENSARY`, `TREEZ_CLIENT_ID`, `TREEZ_API_KEY`, and `TREEZ_API_BASE_URL` are set |
 | `jane` | `JANE_BRIDGE_URL` is set |
 | `bridge` | `BRIDGE_ORDER_PROVIDER_URL`, `BRIDGE_ORDER_PROVIDER_SOURCE`, and `BRIDGE_ORDER_PROVIDER_TIMEOUT_SECONDS` are set |
 | `custom` | `ORDER_PROVIDER_FACTORY` imports successfully |
@@ -312,9 +312,8 @@ curl -X POST "http://127.0.0.1:8787/dead-letter/requeue/<message_id>?process_now
 | `DUTCHIE_INTEGRATOR_KEY` | optional Dutchie integrator key |
 | `DUTCHIE_API_BASE_URL` | Dutchie API base URL |
 | `TREEZ_DISPENSARY` | Treez dispensary slug or name for the built-in Treez adapter |
-| `TREEZ_ORGANIZATION_ID` | Treez organization ID used in the signed auth header |
-| `TREEZ_CERTIFICATE_ID` | Treez certificate ID used in the signed auth header |
-| `TREEZ_PRIVATE_KEY_FILE` | PEM private key file used to sign Treez requests |
+| `TREEZ_CLIENT_ID` | Treez client ID for the access-token flow |
+| `TREEZ_API_KEY` | Treez API key for the access-token flow |
 | `TREEZ_API_BASE_URL` | Treez API base URL |
 | `JANE_BRIDGE_URL` | merchant-operated Jane bridge endpoint |
 | `JANE_BRIDGE_TOKEN` | optional bearer token for the Jane bridge |

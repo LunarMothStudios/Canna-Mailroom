@@ -130,9 +130,8 @@ If you want hook-based ingress instead, rerun `mailroom connections` and choose 
   - uses `DUTCHIE_API_BASE_URL`
 - `TreezOrderProvider`
   - uses `TREEZ_DISPENSARY`
-  - uses `TREEZ_ORGANIZATION_ID`
-  - uses `TREEZ_CERTIFICATE_ID`
-  - uses `TREEZ_PRIVATE_KEY_FILE`
+  - uses `TREEZ_CLIENT_ID`
+  - uses `TREEZ_API_KEY`
   - uses `TREEZ_API_BASE_URL`
 - `JaneOrderProvider`
   - uses `JANE_BRIDGE_URL`

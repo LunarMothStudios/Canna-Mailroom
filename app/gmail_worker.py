@@ -27,7 +27,7 @@ class EmailThreadWorker:
         agent_email: str,
         state: StateStore,
         agent: EmailAgent,
-        sender_policy_mode: str = "all",
+        sender_policy_mode: str = "allowlist",
         allowed_senders: Iterable[str] = (),
         retry_max_attempts: int = 3,
         retry_base_delay_ms: int = 800,
@@ -38,7 +38,7 @@ class EmailThreadWorker:
         self.agent_email = agent_email.lower().strip()
         self.state = state
         self.agent = agent
-        self.sender_policy_mode = sender_policy_mode if sender_policy_mode in {"all", "allowlist"} else "all"
+        self.sender_policy_mode = sender_policy_mode if sender_policy_mode in {"all", "allowlist"} else "allowlist"
         self.allowed_senders = {item.strip().lower() for item in allowed_senders if item.strip()}
 
         self.retry_max_attempts = max(1, retry_max_attempts)

@@ -117,7 +117,7 @@ def normalize_sender_policy_mode(raw_value: str | None) -> str:
     candidate = (raw_value or "").strip().lower()
     if candidate in {"all", "allowlist"}:
         return candidate
-    return candidate or "all"
+    return candidate or "allowlist"
 
 
 def normalize_order_provider(raw_value: str | None) -> str:
@@ -157,7 +157,7 @@ def prompt_knowledge_provider(default: str | None = None) -> str:
 def prompt_sender_policy_mode(default: str | None = None) -> str:
     while True:
         mode = normalize_sender_policy_mode(
-            prompt("Sender policy mode (all or allowlist)", default=default or "all", required=True)
+            prompt("Sender policy mode (all or allowlist)", default=default or "allowlist", required=True)
         )
         if mode in {"all", "allowlist"}:
             return mode
@@ -399,24 +399,20 @@ def configure_cx_providers(env_path: Path, env_values: dict[str, str]) -> dict[s
             default=env_values.get("TREEZ_DISPENSARY") or None,
             required=True,
         )
-        env_values["TREEZ_ORGANIZATION_ID"] = prompt(
-            "Treez organization ID",
-            default=env_values.get("TREEZ_ORGANIZATION_ID") or None,
+        env_values["TREEZ_CLIENT_ID"] = prompt(
+            "Treez client ID",
+            default=env_values.get("TREEZ_CLIENT_ID") or None,
             required=True,
         )
-        env_values["TREEZ_CERTIFICATE_ID"] = prompt(
-            "Treez certificate ID",
-            default=env_values.get("TREEZ_CERTIFICATE_ID") or None,
-            required=True,
-        )
-        env_values["TREEZ_PRIVATE_KEY_FILE"] = prompt(
-            "Treez private key PEM path",
-            default=env_values.get("TREEZ_PRIVATE_KEY_FILE") or None,
+        env_values["TREEZ_API_KEY"] = prompt(
+            "Treez API key",
+            default=env_values.get("TREEZ_API_KEY") or None,
+            secret=True,
             required=True,
         )
         env_values["TREEZ_API_BASE_URL"] = prompt(
             "Treez API base URL",
-            default=env_values.get("TREEZ_API_BASE_URL") or "https://api-prod.treez.io",
+            default=env_values.get("TREEZ_API_BASE_URL") or "https://api.treez.io",
             required=True,
         )
     elif env_values["ORDER_PROVIDER"] == "jane":
@@ -679,10 +675,6 @@ def doctor_command(_: argparse.Namespace) -> int:
         env_values.get("MANUAL_ORDER_FILE"),
         "./examples/manual_orders.sample.json",
     )
-    treez_private_key_path = resolve_runtime_path(
-        env_values.get("TREEZ_PRIVATE_KEY_FILE"),
-        "./treez-private-key.pem",
-    )
     prompt_path = resolve_runtime_path(env_values.get("SYSTEM_PROMPT_FILE"), "./SYSTEM_PROMPT.md")
     state_path = resolve_runtime_path(env_values.get("STATE_DB"), "./state.db")
 
@@ -739,16 +731,15 @@ def doctor_command(_: argparse.Namespace) -> int:
             [
                 (bool(env_values.get("TREEZ_DISPENSARY", "").strip()), "TREEZ_DISPENSARY", env_values.get("TREEZ_DISPENSARY", "missing")),
                 (
-                    bool(env_values.get("TREEZ_ORGANIZATION_ID", "").strip()),
-                    "TREEZ_ORGANIZATION_ID",
-                    env_values.get("TREEZ_ORGANIZATION_ID", "missing"),
+                    bool(env_values.get("TREEZ_CLIENT_ID", "").strip()),
+                    "TREEZ_CLIENT_ID",
+                    env_values.get("TREEZ_CLIENT_ID", "missing"),
                 ),
                 (
-                    bool(env_values.get("TREEZ_CERTIFICATE_ID", "").strip()),
-                    "TREEZ_CERTIFICATE_ID",
-                    env_values.get("TREEZ_CERTIFICATE_ID", "missing"),
+                    bool(env_values.get("TREEZ_API_KEY", "").strip()),
+                    "TREEZ_API_KEY",
+                    "set in .env",
                 ),
-                (treez_private_key_path.exists(), "TREEZ_PRIVATE_KEY_FILE", str(treez_private_key_path)),
                 (
                     bool(env_values.get("TREEZ_API_BASE_URL", "").strip()),
                     "TREEZ_API_BASE_URL",

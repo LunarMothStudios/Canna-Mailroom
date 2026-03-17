@@ -6,10 +6,10 @@ load_dotenv()
 
 
 def normalize_sender_policy_mode(raw_value: str | None) -> str:
-    candidate = (raw_value or "all").strip().lower()
+    candidate = (raw_value or "allowlist").strip().lower()
     if candidate in {"all", "allowlist"}:
         return candidate
-    return "all"
+    return "allowlist"
 
 
 def normalize_order_provider(raw_value: str | None) -> str:
@@ -44,7 +44,7 @@ class Settings:
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-5.4")
     mail_provider: str = os.getenv("MAIL_PROVIDER") or "google_api"
     agent_email: str = os.getenv("AGENT_EMAIL", "")
-    sender_policy_mode: str = normalize_sender_policy_mode(os.getenv("SENDER_POLICY_MODE", "all"))
+    sender_policy_mode: str = normalize_sender_policy_mode(os.getenv("SENDER_POLICY_MODE", "allowlist"))
     allowed_senders: tuple[str, ...] = parse_csv_emails(os.getenv("ALLOWED_SENDERS", ""))
     poll_seconds: int = int(os.getenv("POLL_SECONDS", "20"))
     state_db: str = os.getenv("STATE_DB", "./state.db")
@@ -59,10 +59,9 @@ class Settings:
     dutchie_integrator_key: str = os.getenv("DUTCHIE_INTEGRATOR_KEY", "")
     dutchie_api_base_url: str = os.getenv("DUTCHIE_API_BASE_URL", "https://api.pos.dutchie.com")
     treez_dispensary: str = os.getenv("TREEZ_DISPENSARY", "")
-    treez_organization_id: str = os.getenv("TREEZ_ORGANIZATION_ID", "")
-    treez_certificate_id: str = os.getenv("TREEZ_CERTIFICATE_ID", "")
-    treez_private_key_file: str = os.getenv("TREEZ_PRIVATE_KEY_FILE", "")
-    treez_api_base_url: str = os.getenv("TREEZ_API_BASE_URL", "https://api-prod.treez.io")
+    treez_client_id: str = os.getenv("TREEZ_CLIENT_ID", "")
+    treez_api_key: str = os.getenv("TREEZ_API_KEY", "")
+    treez_api_base_url: str = os.getenv("TREEZ_API_BASE_URL", "https://api.treez.io")
     bridge_order_provider_url: str = os.getenv("BRIDGE_ORDER_PROVIDER_URL", "")
     bridge_order_provider_token: str = os.getenv("BRIDGE_ORDER_PROVIDER_TOKEN", "")
     bridge_order_provider_source: str = os.getenv("BRIDGE_ORDER_PROVIDER_SOURCE", "bridge")

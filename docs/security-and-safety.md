@@ -10,7 +10,7 @@ This document describes the security posture of the current codebase.
 | `credentials.json` | local file | `app/google_clients.py` | Gmail OAuth bootstrap in `google_api` mode |
 | `token.json` | local file | `app/google_clients.py` | ongoing Gmail access in `google_api` mode |
 | `DUTCHIE_LOCATION_KEY` / `DUTCHIE_INTEGRATOR_KEY` | `.env` | `app/cx_providers.py` | third-party order lookup access |
-| `TREEZ_ORGANIZATION_ID` / `TREEZ_CERTIFICATE_ID` / `TREEZ_PRIVATE_KEY_FILE` | `.env` and local file | `app/cx_providers.py` | third-party order lookup access and request signing authority |
+| `TREEZ_CLIENT_ID` / `TREEZ_API_KEY` | `.env` | `app/cx_providers.py` | third-party order lookup access |
 | `JANE_BRIDGE_TOKEN` | `.env` | `app/cx_providers.py` | access to the merchant-operated Jane bridge |
 | `BRIDGE_ORDER_PROVIDER_TOKEN` | `.env` | `app/cx_providers.py` | access to a generic bridge-backed order service |
 | `GOG_GMAIL_HOOK_TOKEN` | `.env` | `app/main.py` | unauthorized callers could inject fake hook events |

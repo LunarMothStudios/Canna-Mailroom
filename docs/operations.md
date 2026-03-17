@@ -13,7 +13,7 @@ This runbook covers the system as implemented today: one process, one mailbox, o
 5. Choose `MAIL_PROVIDER=google_api`.
 6. Choose `ORDER_PROVIDER=manual` unless you already have live Dutchie, Treez, a bridge endpoint, or a custom adapter ready.
 7. Keep the sample `STORE_KNOWLEDGE_FILE` and `MANUAL_ORDER_FILE` paths unless you have real store data ready.
-8. Set `SENDER_POLICY_MODE=allowlist` if you want to restrict replies during testing.
+8. Keep `SENDER_POLICY_MODE=allowlist` until you are ready to open the mailbox to all senders.
 9. Complete the local Google OAuth flow.
 10. Run `mailroom doctor`.
 11. Run `mailroom run --reload`.
@@ -53,7 +53,6 @@ Restart whenever you change:
 - `SYSTEM_PROMPT.md`
 - `STORE_KNOWLEDGE_FILE`
 - `MANUAL_ORDER_FILE`
-- `TREEZ_PRIVATE_KEY_FILE`
 - `credentials.json` or `token.json` in `google_api` mode
 - any `gog` watcher or token settings in `gog` mode
 - sender policy settings such as `SENDER_POLICY_MODE` or `ALLOWED_SENDERS`
@@ -73,11 +72,12 @@ Environment variables that materially affect operations:
 | `DUTCHIE_LOCATION_KEY` | empty | Dutchie location credential when `ORDER_PROVIDER=dutchie` |
 | `DUTCHIE_API_BASE_URL` | `https://api.pos.dutchie.com` | Dutchie API base URL |
 | `TREEZ_DISPENSARY` | empty | Treez dispensary slug or name when `ORDER_PROVIDER=treez` |
-| `TREEZ_PRIVATE_KEY_FILE` | empty | Treez PEM signing key when `ORDER_PROVIDER=treez` |
-| `TREEZ_API_BASE_URL` | `https://api-prod.treez.io` | Treez API base URL |
+| `TREEZ_CLIENT_ID` | empty | Treez client ID when `ORDER_PROVIDER=treez` |
+| `TREEZ_API_KEY` | empty | Treez API key when `ORDER_PROVIDER=treez` |
+| `TREEZ_API_BASE_URL` | `https://api.treez.io` | Treez API base URL |
 | `JANE_BRIDGE_URL` | empty | Jane bridge endpoint when `ORDER_PROVIDER=jane` |
 | `BRIDGE_ORDER_PROVIDER_URL` | empty | generic bridge endpoint when `ORDER_PROVIDER=bridge` |
-| `SENDER_POLICY_MODE` | `all` | reply to all senders or only an explicit allowlist |
+| `SENDER_POLICY_MODE` | `allowlist` | reply to all senders or only an explicit allowlist |
 | `ALLOWED_SENDERS` | empty | comma-separated sender emails used when policy mode is `allowlist` |
 | `POLL_SECONDS` | `20` | delay between polling cycles in `google_api` mode |
 | `RETRY_MAX_ATTEMPTS` | `3` | max attempts per message |
@@ -215,7 +215,7 @@ Response:
 2. Run `mailroom doctor`.
 3. Confirm the configured `STORE_KNOWLEDGE_FILE` exists.
 4. If `ORDER_PROVIDER=manual`, confirm the configured `MANUAL_ORDER_FILE` exists.
-5. If `ORDER_PROVIDER=treez`, confirm the Treez credential values are set and `TREEZ_PRIVATE_KEY_FILE` exists.
+5. If `ORDER_PROVIDER=treez`, confirm `TREEZ_DISPENSARY`, `TREEZ_CLIENT_ID`, and `TREEZ_API_KEY` are set.
 6. If `ORDER_PROVIDER=jane` or `ORDER_PROVIDER=bridge`, confirm the bridge URL is still reachable and the bearer token is current if you use one.
 7. If `ORDER_PROVIDER=custom`, confirm `ORDER_PROVIDER_FACTORY` still imports.
 8. In `google_api` mode, confirm `credentials.json` and `token.json`.
