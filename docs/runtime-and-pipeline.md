@@ -1,23 +1,31 @@
 # Runtime And Pipeline
 
-_Last verified against commit `b6c46e6`._
-
-This document follows the actual message-processing flow implemented in `app/main.py`, `app/gmail_worker.py`, `app/mailbox.py`, and `app/state.py`.
+This document follows the actual message-processing flow implemented in `app/main.py`, `app/gmail_worker.py`, `app/mailbox.py`, `app/cx_toolset.py`, `app/cx_providers.py`, and `app/state.py`.
 
 ## Stage-By-Stage Execution
 
 | Stage | Code path | Input | Output |
 |---|---|---|---|
-| 0. Startup | `app.main.startup()` | env vars, prompt file, provider-specific auth material | initialized state store, agent, mailbox provider, and optional watcher or poll thread |
+| 0. Startup | `app.main.startup()` | env vars, prompt file, provider-specific auth material | initialized state store, mailbox provider, toolset, order provider, knowledge provider, and optional watcher or poll thread |
 | 1. Ingress | polling or hook path | unread Gmail IDs plus requeued IDs, or `/hooks/gmail` payload | candidate message IDs or `MailboxMessage` objects |
 | 2. Snapshot inbound message | `_load_message()` or `process_mailbox_message()` | provider message or hook payload | `inbound_messages` row for retry/replay |
 | 3. Early exits and normalization | `clean_reply_text()` | normalized body text | cleaned user input or skip |
 | 4. Restore thread context | `StateStore.get_last_response_id()` | thread ID | previous OpenAI response ID or `None` |
 | 5. Generate reply | `EmailAgent.respond_in_thread()` | cleaned input, email metadata, previous response ID | final reply text and new response ID |
-| 6. Execute model tool loop | `EmailAgent._run_tool()` | function calls emitted by the model | tool outputs fed back into the model |
+| 6. Execute CX tool loop | `DispensaryCxToolset.run()` | function calls emitted by the model | order or store-knowledge payloads fed back into the model |
 | 7. Send with idempotency guard | `_send_with_idempotency_guard()` | inbound message ID, reply body, thread metadata | existing sent reply record or new outbound send |
 | 8. Finalize success path | provider mark-read plus state writes | message ID and thread ID | message marked processed, thread pointer updated, dead letter cleared |
 | 9. Retry or dead-letter | `_process_message_with_retry()` | raised exception | retry with backoff or terminal dead-letter record |
+
+## Tool Surface
+
+The model can call exactly two functions:
+
+- `lookup_order`
+- `search_store_knowledge`
+
+`lookup_order` is backed by the configured `OrderProvider`.
+`search_store_knowledge` is backed by the configured `KnowledgeProvider`.
 
 ## Ingress Paths
 
@@ -51,6 +59,8 @@ sequenceDiagram
     participant DB as StateStore
     participant Agent as EmailAgent
     participant OpenAI as OpenAI API
+    participant Toolset as DispensaryCxToolset
+    participant Providers as OrderProvider / KnowledgeProvider
     participant Mailbox as MailboxProvider
 
     Sender->>Ingress: send email
@@ -73,7 +83,11 @@ sequenceDiagram
     OpenAI-->>Agent: response or function calls
 
     alt model requests tool calls
-        Agent->>OpenAI: additional round trips with tool output
+        Agent->>Toolset: run(...)
+        Toolset->>Providers: order lookup or knowledge search
+        Providers-->>Toolset: structured result
+        Toolset-->>Agent: tool output
+        Agent->>OpenAI: additional round trip with tool output
         OpenAI-->>Agent: final response
     end
 
@@ -105,22 +119,6 @@ sequenceDiagram
 
 `process_once()` is only used in `google_api` mode. It merges unread Gmail message IDs with any `requeued` dead-letter IDs so operators can replay a message even if it is no longer unread.
 
-```mermaid
-flowchart TD
-    Poll["List unread message ids"] --> Merge["Merge with requeued dead-letter ids"]
-    Requeue["List requeued dead-letter ids"] --> Merge
-    Merge --> Dedupe["Remove duplicates"]
-    Dedupe --> Loop["Process each candidate"]
-    Loop --> Check{"Already processed?"}
-    Check -- Yes --> Skip["Skip message"]
-    Check -- No --> Retry["Run retry wrapper"]
-    Retry --> Success{"Success?"}
-    Success -- Yes --> Count["Increment processed count"]
-    Success -- No --> Next["Continue to next message"]
-    Skip --> Next
-    Count --> Next
-```
-
 ## Success Path Details
 
 The worker considers a message successfully processed when it:
@@ -133,11 +131,11 @@ The worker considers a message successfully processed when it:
 6. clears any stale dead-letter row,
 7. deletes the `inbound_messages` snapshot.
 
-Messages skipped because they are self-originated or empty are also marked processed, and their inbound snapshot is deleted.
+Messages skipped because they are self-originated, outside the sender policy, or empty are also marked processed, and their inbound snapshot is deleted.
 
 ## Retry Logic
 
-Transient failure handling is implemented entirely inside `EmailThreadWorker._process_message_with_retry()`.
+Transient failure handling is implemented inside `EmailThreadWorker._process_message_with_retry()`.
 
 - Retry count: `RETRY_MAX_ATTEMPTS`
 - Base delay: `RETRY_BASE_DELAY_MS`
@@ -145,26 +143,20 @@ Transient failure handling is implemented entirely inside `EmailThreadWorker._pr
 - Jitter: `RETRY_JITTER_MS`
 
 Transient classification sources:
+
 - Google `HttpError` status in `{408, 409, 425, 429, 500, 502, 503, 504}`
 - exception attribute `status_code` in the same set
 - exception class names containing tokens such as `timeout`, `ratelimit`, `connection`, `temporar`, or `internalserver`
 
-```mermaid
-flowchart TD
-    Err["Exception raised"] --> Classify{"Transient?"}
-    Classify -- Yes --> Attempts{"Attempts remaining?"}
-    Attempts -- Yes --> Sleep["Exponential backoff plus jitter"]
-    Sleep --> Retry["Retry message"]
-    Attempts -- No --> Dead["Write dead_letters row"]
-    Classify -- No --> Dead
-    Dead --> Mark["mark_processed(message_id)"]
-```
+Provider-specific note:
+
+- `ProviderAPIError` from the order provider participates in the same retry classification via its `status_code`
 
 ## Failure Points And Actual Behavior
 
 | Failure point | Current behavior | Retry? |
 |---|---|---|
-| Missing or invalid provider setup at startup | app startup fails before worker begins | No |
+| missing or invalid provider setup at startup | app startup fails before worker begins | No |
 | Gmail unread list call fails in polling mode | logs and returns zero processed for that cycle | Natural retry on next poll |
 | `gog gmail watch start` fails | startup fails in `gog` mode | No |
 | `gog gmail watch serve` exits | watcher manager restarts it after 2 seconds | Internal restart |
@@ -172,39 +164,6 @@ flowchart TD
 | provider message load fails | message run enters retry wrapper | Yes |
 | OpenAI Responses API call fails | message run enters retry wrapper | Yes |
 | tool argument JSON parsing fails | terminal error and dead-letter | No |
+| order-provider API failure | message run enters retry wrapper when classified transient | Sometimes |
 | outbound send fails | message run enters retry wrapper | Yes |
 | state write fails during message run | message run fails and usually dead-letters | Partial |
-
-## Explicit Checkpoints
-
-Current checkpointing mechanisms:
-
-- `processed_messages`: inbound message dedupe
-- `thread_state`: conversation continuity pointer
-- `dead_letters`: failed message tracking and replay queue
-- `outbound_replies`: outbound send idempotency tracking
-- `inbound_messages`: normalized inbound snapshot for retries and hook replay
-
-Important behaviors:
-
-- Dead-lettered messages are marked processed to avoid infinite retry loops.
-- Requeueing a dead-letter row changes its status to `requeued` and removes the processed-message dedupe row.
-- Successful replay deletes the dead-letter row and deletes the inbound snapshot.
-
-## Job Lifecycle
-
-```mermaid
-stateDiagram-v2
-    [*] --> Ingressed
-    Ingressed --> Snapshotted
-    Snapshotted --> Skipped: self-message or empty text
-    Snapshotted --> Generated: reply generation succeeds
-    Generated --> Replied: send path succeeds
-    Generated --> RetryWait: transient failure
-    RetryWait --> Generated: next attempt
-    Generated --> DeadLettered: retries exhausted or non-transient failure
-    Replied --> Finalized: persist state and clear snapshot
-    DeadLettered --> Finalized: persist dead letter and keep snapshot
-    Skipped --> Finalized
-    Finalized --> [*]
-```

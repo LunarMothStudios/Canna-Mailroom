@@ -1,7 +1,5 @@
 # Operations
 
-_Last verified against commit `b6c46e6`._
-
 This runbook covers the system as implemented today: one process, one mailbox, one SQLite file, and one selected provider.
 
 ## Day-1 Setup Checklist
@@ -13,12 +11,14 @@ This runbook covers the system as implemented today: one process, one mailbox, o
 3. Activate the virtual environment: `source .venv/bin/activate`.
 4. Run `mailroom setup`.
 5. Choose `MAIL_PROVIDER=google_api`.
-6. Set `SENDER_POLICY_MODE=allowlist` if you want to restrict replies during testing.
-7. Complete the local Google OAuth flow.
-8. Run `mailroom doctor`.
-9. Run `mailroom run --reload`.
-10. Check `curl http://127.0.0.1:8787/healthz`.
-11. Send a test email and reply in the same thread.
+6. Choose `ORDER_PROVIDER=manual` unless you already have live Dutchie, Treez, a bridge endpoint, or a custom adapter ready.
+7. Keep the sample `STORE_KNOWLEDGE_FILE` and `MANUAL_ORDER_FILE` paths unless you have real store data ready.
+8. Keep `SENDER_POLICY_MODE=allowlist` until you are ready to open the mailbox to all senders.
+9. Complete the local Google OAuth flow.
+10. Run `mailroom doctor`.
+11. Run `mailroom run --reload`.
+12. Check `curl http://127.0.0.1:8787/healthz`.
+13. Send a test email and reply in the same thread.
 
 ### Server-style hook path: `gog`
 
@@ -29,9 +29,10 @@ This runbook covers the system as implemented today: one process, one mailbox, o
 5. Activate the virtual environment: `source .venv/bin/activate`.
 6. Run `mailroom setup`.
 7. Choose `MAIL_PROVIDER=gog`.
-8. Complete the `gog` connection prompts.
-9. Run `mailroom doctor`.
-10. Run `mailroom run --reload`.
+8. Choose and configure the CX providers before finishing setup.
+9. Complete the `gog` connection prompts.
+10. Run `mailroom doctor`.
+11. Run `mailroom run --reload`.
 
 ## Day-2 Operations
 
@@ -50,9 +51,12 @@ If you are running in the foreground, use `Ctrl-C`. For supervised deployments, 
 Restart whenever you change:
 - `.env`
 - `SYSTEM_PROMPT.md`
+- `STORE_KNOWLEDGE_FILE`
+- `MANUAL_ORDER_FILE`
 - `credentials.json` or `token.json` in `google_api` mode
 - any `gog` watcher or token settings in `gog` mode
 - sender policy settings such as `SENDER_POLICY_MODE` or `ALLOWED_SENDERS`
+- custom provider code referenced by `ORDER_PROVIDER_FACTORY`
 
 ### Tune
 
@@ -61,7 +65,19 @@ Environment variables that materially affect operations:
 | Setting | Default | Effect |
 |---|---|---|
 | `MAIL_PROVIDER` | `google_api` | selects polling or hook ingress |
-| `SENDER_POLICY_MODE` | `all` | reply to all senders or only an explicit allowlist |
+| `ORDER_PROVIDER` | `manual` | selects manual, Dutchie, Treez, Jane bridge, generic bridge, or custom order lookup |
+| `KNOWLEDGE_PROVIDER` | `manual` | selects the store knowledge backend |
+| `STORE_KNOWLEDGE_FILE` | `./examples/store_knowledge.sample.json` | store FAQ, policy, and location data |
+| `MANUAL_ORDER_FILE` | `./examples/manual_orders.sample.json` | manual order lookup file |
+| `DUTCHIE_LOCATION_KEY` | empty | Dutchie location credential when `ORDER_PROVIDER=dutchie` |
+| `DUTCHIE_API_BASE_URL` | `https://api.pos.dutchie.com` | Dutchie API base URL |
+| `TREEZ_DISPENSARY` | empty | Treez dispensary slug or name when `ORDER_PROVIDER=treez` |
+| `TREEZ_CLIENT_ID` | empty | Treez client ID when `ORDER_PROVIDER=treez` |
+| `TREEZ_API_KEY` | empty | Treez API key when `ORDER_PROVIDER=treez` |
+| `TREEZ_API_BASE_URL` | `https://api.treez.io` | Treez API base URL |
+| `JANE_BRIDGE_URL` | empty | Jane bridge endpoint when `ORDER_PROVIDER=jane` |
+| `BRIDGE_ORDER_PROVIDER_URL` | empty | generic bridge endpoint when `ORDER_PROVIDER=bridge` |
+| `SENDER_POLICY_MODE` | `allowlist` | reply to all senders or only an explicit allowlist |
 | `ALLOWED_SENDERS` | empty | comma-separated sender emails used when policy mode is `allowlist` |
 | `POLL_SECONDS` | `20` | delay between polling cycles in `google_api` mode |
 | `RETRY_MAX_ATTEMPTS` | `3` | max attempts per message |
@@ -111,6 +127,8 @@ curl http://127.0.0.1:8787/healthz
 Look for:
 - `ok: true`
 - expected `mail_provider`
+- expected `order_provider`
+- expected `knowledge_provider`
 - expected `sender_policy_mode`
 - expected `ingress_mode`
 - `worker_alive: true`
@@ -165,7 +183,8 @@ Look for:
 - repeated error class patterns
 - auth failures
 - rate-limit failures
-- tool-call or watcher configuration failures
+- order-provider failures
+- watcher configuration failures
 
 ## State Inspection
 
@@ -194,9 +213,14 @@ Symptoms:
 Response:
 1. Verify `.env` paths and required values.
 2. Run `mailroom doctor`.
-3. In `google_api` mode, confirm `credentials.json` and `token.json`.
-4. In `gog` mode, confirm `gog` is installed and the watcher settings are non-empty.
-5. Restart the app.
+3. Confirm the configured `STORE_KNOWLEDGE_FILE` exists.
+4. If `ORDER_PROVIDER=manual`, confirm the configured `MANUAL_ORDER_FILE` exists.
+5. If `ORDER_PROVIDER=treez`, confirm `TREEZ_DISPENSARY`, `TREEZ_CLIENT_ID`, and `TREEZ_API_KEY` are set.
+6. If `ORDER_PROVIDER=jane` or `ORDER_PROVIDER=bridge`, confirm the bridge URL is still reachable and the bearer token is current if you use one.
+7. If `ORDER_PROVIDER=custom`, confirm `ORDER_PROVIDER_FACTORY` still imports.
+8. In `google_api` mode, confirm `credentials.json` and `token.json`.
+9. In `gog` mode, confirm `gog` is installed and the watcher settings are non-empty.
+10. Restart the app.
 
 ### Incident B: No Replies In `google_api` Mode
 
@@ -296,6 +320,6 @@ For `gog` mode, Mailroom-specific secrets still live in `.env`, but the Google a
 
 - run only one active instance per mailbox
 - use a dedicated mailbox
-- Drive and Docs tools are available only in `google_api` mode
+- the customer-facing tool surface is always `lookup_order` plus `search_store_knowledge`
 - `gog` mode still depends on external Gmail watch plumbing
 - expect manual investigation for failures because observability is intentionally minimal

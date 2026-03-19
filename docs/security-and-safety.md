@@ -1,29 +1,26 @@
 # Security And Safety
 
-_Last verified against commit `b6c46e6`._
-
-This document describes the security posture of the code as it exists today. It does not describe future controls that are not implemented.
+This document describes the security posture of the current codebase.
 
 ## Secrets And Auth Model
 
-| Asset | Source | Used by | Current risk if compromised |
+| Asset | Source | Used by | Risk if compromised |
 |---|---|---|---|
 | `OPENAI_API_KEY` | `.env` | `app/ai_agent.py` | model access and billable API usage |
-| `credentials.json` | local file | `app/google_clients.py` | bootstrap access to Gmail, Drive, and Docs in `google_api` mode |
-| `token.json` | local file | `app/google_clients.py` | ongoing mailbox and Workspace access in `google_api` mode |
-| `GOG_GMAIL_HOOK_TOKEN` | `.env` | `app/main.py` | unauthorized callers could inject fake `/hooks/gmail` events |
-| `GOG_GMAIL_PUSH_TOKEN` | `.env` | `app/gog_watcher.py` | unauthorized callers could reach the local `gog` watch-serve endpoint |
-| `state.db` | local file | `app/state.py`, `app/gmail_worker.py` | thread pointers, message metadata, dead-letter details, send-tracking metadata, cached message bodies |
+| `credentials.json` | local file | `app/google_clients.py` | Gmail OAuth bootstrap in `google_api` mode |
+| `token.json` | local file | `app/google_clients.py` | ongoing Gmail access in `google_api` mode |
+| `DUTCHIE_LOCATION_KEY` / `DUTCHIE_INTEGRATOR_KEY` | `.env` | `app/cx_providers.py` | third-party order lookup access |
+| `TREEZ_CLIENT_ID` / `TREEZ_API_KEY` | `.env` | `app/cx_providers.py` | third-party order lookup access |
+| `JANE_BRIDGE_TOKEN` | `.env` | `app/cx_providers.py` | access to the merchant-operated Jane bridge |
+| `BRIDGE_ORDER_PROVIDER_TOKEN` | `.env` | `app/cx_providers.py` | access to a generic bridge-backed order service |
+| `GOG_GMAIL_HOOK_TOKEN` | `.env` | `app/main.py` | unauthorized callers could inject fake hook events |
+| `GOG_GMAIL_PUSH_TOKEN` | `.env` | `app/gog_watcher.py` | unauthorized callers could reach the local `gog` watch endpoint |
+| `state.db` | local file | `app/state.py`, `app/gmail_worker.py` | thread pointers, message metadata, dead-letter details, cached message bodies |
 | `SYSTEM_PROMPT.md` | local file | `app/ai_agent.py` | changes model behavior on restart |
 
-Provider notes:
-- `google_api` uses the OAuth desktop flow and local token files.
-- `gog` mode delegates Google account auth to the external `gog` CLI. Mailroom still owns the hook and push tokens in `.env`.
+Current Google scope in Mailroom itself:
 
-Current Google scopes in Mailroom itself are broad in `google_api` mode:
 - `https://mail.google.com/`
-- `https://www.googleapis.com/auth/drive`
-- `https://www.googleapis.com/auth/documents`
 
 ## What The Model Can And Cannot Control
 
@@ -32,53 +29,45 @@ Current Google scopes in Mailroom itself are broad in `google_api` mode:
 | recipient address | application | parsed from the inbound `From` header |
 | reply thread | application | set from the inbound thread ID |
 | reply body | model | generated through `EmailAgent.respond_in_thread()` |
-| tool calls | model within application-defined limits | tool surface changes by provider |
+| tool calls | model within application-defined limits | limited to two explicit functions |
 | Gmail reads and sends | application or external `gog` transport | the model has no direct Gmail tool |
 
-This means the model cannot choose an arbitrary recipient or browse the inbox directly, but it can decide the actual body text that gets sent back to the original sender.
+This means the model cannot browse the inbox or choose arbitrary recipients, but it can decide the final text sent to the original sender.
 
-## Approval Model
+## Current Approval Model
 
-There is no manual approval gate in the current code.
-
-Current send decision path:
-
-1. inbound message is loaded or received through a hook,
-2. model generates reply text,
-3. worker sends reply automatically if the send idempotency guard does not detect that it already sent one.
+There is no manual approval gate.
 
 Current safeguards before send:
+
 - self-message skip
 - empty-body skip
-- optional sender allowlist via `SENDER_POLICY_MODE=allowlist` plus `ALLOWED_SENDERS`
+- optional sender allowlist
 - inbound dedupe via `processed_messages`
 - outbound dedupe via `outbound_replies`
 - best-effort thread scan in `google_api` mode
 
 Missing safeguards:
-- human review or approval
+
+- human approval before send
 - denylist support
 - outbound content filtering
-- per-sender policy rules
 - rate limiting
+- per-sender policy rules
 
 ## Data Handling Rules
 
 ### Data sent to OpenAI
 
-The application sends:
 - cleaned email body text
 - `From`
 - `Subject`
 - thread ID
 - previous OpenAI `response.id` chain
-- tool outputs when the model calls tools
-
-If the model calls Drive or Docs tools in `google_api` mode, their outputs are also provided back to the model.
+- tool outputs from `lookup_order` and `search_store_knowledge`
 
 ### Data stored locally
 
-The application stores:
 - thread IDs
 - OpenAI response IDs
 - inbound message IDs
@@ -86,52 +75,13 @@ The application stores:
 - outbound sent-message tracking metadata
 - cached inbound message snapshots in `inbound_messages`
 
-Important current behavior:
-- `inbound_messages.body_text` stores normalized inbound body text temporarily
-- successful and skipped messages delete that snapshot
-- terminal failures can leave the cached body in SQLite until replay or cleanup
+### Data sent to providers
 
-### Data sent back out
-
-The application sends the model-generated reply body back to the original sender:
-- through Gmail API in `google_api` mode
-- through `gog gmail send` in `gog` mode
-
-## Trust Boundary Diagram
-
-```mermaid
-flowchart LR
-    Inbound["Inbound email"] --> Parse["Normalize and clean"]
-    Parse --> Model["OpenAI API"]
-    Model --> Send["Outbound reply"]
-
-    subgraph Local["Local files and runtime"]
-        Env[".env"]
-        DB["state.db"]
-        Prompt["SYSTEM_PROMPT.md"]
-        OAuth["credentials.json and token.json"]
-        Hook["hook and push tokens"]
-    end
-
-    Env --> Model
-    OAuth --> Parse
-    Hook --> Parse
-    Parse --> DB
-    Send --> DB
-    Prompt --> Model
-```
-
-## Current Safety Boundary
-
-```mermaid
-flowchart TD
-    Message["Inbound message"] --> Skip{"Self-message or empty text?"}
-    Skip -- Yes --> Stop["Do not send"]
-    Skip -- No --> Model["Generate reply"]
-    Model --> Guard{"Reply already sent?"}
-    Guard -- Yes --> Stop
-    Guard -- No --> Send["Send reply automatically"]
-```
+- `search_store_knowledge` reads local JSON only
+- `lookup_order` may send order number and verification data to the configured order provider
+- the built-in Dutchie adapter may send sender email to Dutchie for best-effort customer verification
+- the built-in Treez adapter signs each request with the configured private key and may send sender verification hints when the caller provides them
+- bridge-backed Jane or generic bridge providers send order identifiers and optional verification hints to the configured bridge URL
 
 ## Safe Defaults For Local Use
 
@@ -139,30 +89,14 @@ flowchart TD
 - prefer `SENDER_POLICY_MODE=allowlist` during early testing
 - keep `.env`, `state.db`, and prompt files out of git
 - keep `credentials.json` and `token.json` out of git in `google_api` mode
-- avoid sensitive or regulated inboxes
+- avoid sensitive or regulated inboxes until you are comfortable with the guardrails
 - run only one active instance against the mailbox
 
-Additional `gog` safety notes:
-- treat the hook token like a shared secret
-- do not expose the hook endpoint publicly without access control
-- assume the public push path is part of your trust boundary
+## Known Gaps
 
-## Known Security Gaps
-
-- broad Google OAuth scopes in `google_api` mode
 - no manual approval gate
-- sender policy is limited to a simple email allowlist
-- no encryption-at-rest beyond host defaults
-- no audit log beyond stdout and SQLite metadata
 - no DLP or PII redaction layer
+- sender policy is limited to a simple email allowlist
 - cached inbound body text can persist in SQLite after failures
-
-## Recommended Hardening Roadmap
-
-1. Expand the sender allowlist and add denylist controls.
-2. Add domain-level sender policy and better match rules.
-3. Add an approval-required mode before outbound send.
-4. Add structured audit logs with message and thread IDs.
-5. Reduce Google scopes where practical.
-6. Add explicit cleanup policy for stale `inbound_messages`.
-7. Move secrets and token material into a managed secret strategy for server deployments.
+- no encryption-at-rest beyond host defaults
+- no structured audit log beyond stdout and SQLite metadata

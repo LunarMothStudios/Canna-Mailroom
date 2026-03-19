@@ -1,7 +1,5 @@
 # Documentation Index
 
-_Last verified against commit `b6c46e6`._
-
 ## Start Here By Audience
 
 | Audience | Read first | Why |
@@ -53,6 +51,7 @@ _Last verified against commit `b6c46e6`._
 | `app/google_clients.py` | [architecture.md](architecture.md), [security-and-safety.md](security-and-safety.md), [deployment.md](deployment.md) |
 | `app/state.py` | [data-model.md](data-model.md), [runtime-and-pipeline.md](runtime-and-pipeline.md), [operations.md](operations.md) |
 | `app/ai_agent.py` | [architecture.md](architecture.md), [runtime-and-pipeline.md](runtime-and-pipeline.md), [security-and-safety.md](security-and-safety.md) |
-| `app/tools.py` | [architecture.md](architecture.md), [security-and-safety.md](security-and-safety.md), [faq.md](faq.md) |
+| `app/cx_toolset.py` | [architecture.md](architecture.md), [security-and-safety.md](security-and-safety.md), [faq.md](faq.md) |
+| `app/cx_providers.py` | [architecture.md](architecture.md), [security-and-safety.md](security-and-safety.md), [faq.md](faq.md) |
 | `app/gmail_worker.py` | [architecture.md](architecture.md), [runtime-and-pipeline.md](runtime-and-pipeline.md), [operations.md](operations.md) |
 | `scripts/auth_google.py` | [cli-reference.md](cli-reference.md), [operations.md](operations.md), [deployment.md](deployment.md) |

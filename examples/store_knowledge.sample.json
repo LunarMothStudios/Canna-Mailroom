@@ -1,0 +1,89 @@
+{
+  "brand": {
+    "name": "Sample Herb Co.",
+    "support_phone": "(555) 010-4200",
+    "support_email": "support@sampleherb.example",
+    "support_url": "https://sampleherb.example/support"
+  },
+  "locations": [
+    {
+      "id": "downtown",
+      "name": "Downtown",
+      "aliases": ["main street", "loop"],
+      "address": "123 Main St, Chicago, IL 60601",
+      "hours": {
+        "monday": "9:00 AM - 9:00 PM",
+        "tuesday": "9:00 AM - 9:00 PM",
+        "wednesday": "9:00 AM - 9:00 PM",
+        "thursday": "9:00 AM - 9:00 PM",
+        "friday": "9:00 AM - 10:00 PM",
+        "saturday": "9:00 AM - 10:00 PM",
+        "sunday": "10:00 AM - 8:00 PM"
+      },
+      "payment_methods": ["Cash", "Debit"],
+      "supports_medical": true,
+      "supports_adult_use": true,
+      "id_requirements": [
+        "Adult-use customers must be 21+ with a valid government-issued photo ID.",
+        "Medical patients should bring a valid medical card and photo ID."
+      ],
+      "pickup_notes": "Pickup orders are usually held until closing on the same day unless the order message says otherwise.",
+      "delivery_notes": "Delivery is available daily from noon to 7:00 PM within the downtown delivery zone.",
+      "contact_phone": "(555) 010-4201",
+      "contact_email": "downtown@sampleherb.example"
+    },
+    {
+      "id": "northside",
+      "name": "Northside",
+      "aliases": ["north side", "uptown"],
+      "address": "456 Lakeshore Ave, Chicago, IL 60640",
+      "hours": {
+        "daily": "10:00 AM - 8:00 PM"
+      },
+      "payment_methods": ["Cash", "Debit", "CanPay"],
+      "supports_medical": true,
+      "supports_adult_use": true,
+      "id_requirements": [
+        "Adult-use customers must be 21+ with a valid government-issued photo ID.",
+        "Medical patients should bring a valid medical card and photo ID."
+      ],
+      "pickup_notes": "Pickup orders are typically held for two hours after the ready notification during business hours.",
+      "delivery_notes": "Northside does not currently offer delivery.",
+      "contact_phone": "(555) 010-4202",
+      "contact_email": "northside@sampleherb.example"
+    }
+  ],
+  "policies": {
+    "cancellation": "The email agent cannot cancel or edit orders. Customers should call the store directly for time-sensitive changes, and changes are never guaranteed.",
+    "refund": "Refunds and exchanges are handled according to store and state policy. Customers with order issues should contact the store directly with their order number.",
+    "pickup": "Pickup timing depends on order volume and compliance review. Customers should wait for a ready message before arriving unless the store has told them otherwise.",
+    "delivery": "Delivery availability, cutoffs, and minimums vary by location and service area.",
+    "payments": "Accepted payment methods can vary by location. Ask for a location if the customer did not specify one."
+  },
+  "faq_entries": [
+    {
+      "id": "faq-id-general",
+      "topic": "id_requirements",
+      "question": "What ID do I need to shop?",
+      "answer": "Bring a valid government-issued photo ID. Medical patients should also bring their medical card when required by the store and state.",
+      "keywords": ["id", "license", "passport", "medical card", "age"],
+      "location_ids": []
+    },
+    {
+      "id": "faq-hours-general",
+      "topic": "hours",
+      "question": "What are your hours?",
+      "answer": "Hours vary by location. If you tell me which store you mean, I can confirm the schedule.",
+      "keywords": ["hours", "open", "close"],
+      "location_ids": []
+    },
+    {
+      "id": "faq-cancel",
+      "topic": "cancellation",
+      "question": "Can I cancel or change my order?",
+      "answer": "This email agent cannot cancel or change orders. Please contact the store directly as soon as possible, and the team can tell you what is still possible.",
+      "keywords": ["cancel", "change", "edit", "modify"],
+      "location_ids": []
+    }
+  ]
+}

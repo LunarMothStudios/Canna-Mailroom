@@ -1,37 +1,53 @@
 # Canna Mailroom
 
-_Last verified against commit `b6c46e6`._
+[!WARNING]
+> `Alpha release`: Canna Mailroom is currently in active alpha. Use it with monitored inboxes, curated store knowledge, and allowlist senders. It is not positioned as a broad self-serve production release yet.
 
-Canna Mailroom is a local-first, email-native AI agent runtime. It treats each email thread as a session, calls the OpenAI Responses API to generate replies, and sends those replies back into the same thread.
+Local-first, email-native dispensary CX agent runtime.
 
-The runtime now has two mailbox harnesses:
-- `google_api`: direct Gmail polling plus native Drive and Docs tools
-- `gog`: `gog`-managed Gmail watch/send with hook ingress; email-only plus `research_web`
+Canna Mailroom treats each email thread as a session, keeps continuity with the OpenAI Responses API, and sends replies back into the same thread. The customer-facing agent is intentionally narrow: it can only call two read-only tools.
 
-## Who It Is For
+- `lookup_order`
+- `search_store_knowledge`
 
-- Developers proving out an email-native agent before building a larger product shell
-- Operators running one dedicated mailbox on one host
-- Stakeholders evaluating the value and boundaries of a “reply by email” agent
+The tool contracts stay stable across dispensaries. Real store differences are handled behind provider adapters.
 
-## What It Does Today
+## What It Is Now
 
-- Monitors one mailbox
-- Keeps per-thread continuity using the last OpenAI `response.id`
-- Can run in `all` or `allowlist` sender policy mode
-- Retries transient failures with backoff
-- Dead-letters exhausted failures for replay
-- Exposes health, dead-letter, and replay endpoints
-- Supports two ingress models:
-  - polling via Gmail API
-  - hook delivery via `gog gmail watch serve`
+- A provider-agnostic CX email runtime for dispensaries
+- One mailbox per runtime, one active process per mailbox
+- Two mailbox harnesses:
+  - `google_api`: direct Gmail polling
+  - `gog`: `gog`-managed Gmail watch/send with hook ingress
+- Pluggable order lookup:
+  - `manual`
+  - `dutchie`
+  - `treez`
+  - `jane` via bridge contract
+  - `bridge` for other vendors
+  - `custom` via Python import path
+- Manual store knowledge backed by JSON
 
-## Runtime Modes
+## What The Agent Can Do
 
-| Mode | What it uses | Best fit | Current limits |
-|---|---|---|---|
-| `google_api` | local Google OAuth files plus Gmail/Drive/Docs APIs | simplest local bring-up | still requires Google OAuth setup |
-| `gog` | external `gog` CLI for Gmail watch/send | server-style Gmail harness with hook ingress | still requires one deployer-owned GCP project and public HTTPS push delivery |
+- Answer order-status questions when it has an order number
+- Answer store-owned FAQ and policy questions about:
+  - hours
+  - payments
+  - pickup
+  - delivery
+  - ID requirements
+  - cancellation and refund guidance
+  - store contact details
+
+## What The Agent Will Not Do
+
+- browse the public web for customer replies
+- edit or cancel orders
+- promise refunds
+- recommend cannabis products or dosing
+- browse Gmail directly as a tool
+- ingest attachments
 
 ## How It Works
 
@@ -44,67 +60,146 @@ flowchart LR
     Push --> Hook["POST /hooks/gmail"]
     Hook --> Worker
     Worker --> Agent["OpenAI email agent"]
-    Agent --> Tools["research_web and optional Drive/Docs tools"]
+    Agent --> Toolset["DispensaryCxToolset"]
+    Toolset --> Orders["OrderProvider"]
+    Toolset --> Knowledge["KnowledgeProvider"]
     Worker --> State["SQLite state.db"]
     Worker --> Gmail
 ```
 
-## 5-Minute Quickstart
+## Quickstart
 
-Use the simplest path first: `google_api`.
+Use the simplest path first: `google_api` plus the built-in sample data.
 
 1. Create a Python 3.11 virtual environment and install the package.
 
-   ```bash
-   make setup
-   source .venv/bin/activate
-   ```
+```bash
+make setup
+source .venv/bin/activate
+```
 
-2. Run the interactive wizard.
+2. Run the setup wizard.
 
-   ```bash
-   mailroom setup
-   ```
+```bash
+mailroom setup
+```
 
-   For the quickest local test:
-   - choose `MAIL_PROVIDER=google_api`
-   - enter a real agent mailbox address
-   - set `SENDER_POLICY_MODE=allowlist` if you only want approved senders to get replies
-   - complete the one-time Google OAuth flow
+Recommended first-run choices:
+- `MAIL_PROVIDER=google_api`
+- `ORDER_PROVIDER=manual`
+- `KNOWLEDGE_PROVIDER=manual`
+- keep the default sample JSON paths unless you already have real store data
+- use `SENDER_POLICY_MODE=allowlist` while testing
 
-3. Run the local checks.
+3. Run local checks.
 
-   ```bash
-   mailroom doctor
-   ```
+```bash
+mailroom doctor
+python3.11 -m unittest discover -s tests
+```
 
-4. Start the service.
+4. Start the app.
 
-   ```bash
-   mailroom run --reload
-   ```
+```bash
+mailroom run --reload
+```
 
 5. Check health.
 
-   ```bash
-   curl http://127.0.0.1:8787/healthz
-   ```
+```bash
+curl http://127.0.0.1:8787/healthz
+```
 
-6. Send an email to `AGENT_EMAIL` from a different mailbox and wait for the reply. Reply again in the same thread to verify continuity.
+6. Send a test email to `AGENT_EMAIL` from another mailbox and reply in the same thread to verify continuity.
 
 If you want hook-based ingress instead, rerun `mailroom connections` and choose `MAIL_PROVIDER=gog`.
+
+## Provider Surface
+
+### Stable model tools
+
+- `lookup_order(order_number, customer_email?, phone_last4?)`
+- `search_store_knowledge(question, location_hint?)`
+
+### Built-in providers
+
+- `ManualKnowledgeProvider`
+  - reads `STORE_KNOWLEDGE_FILE`
+- `ManualOrderProvider`
+  - reads `MANUAL_ORDER_FILE`
+- `DutchieOrderProvider`
+  - uses `DUTCHIE_LOCATION_KEY`
+  - optionally uses `DUTCHIE_INTEGRATOR_KEY`
+  - uses `DUTCHIE_API_BASE_URL`
+- `TreezOrderProvider`
+  - uses `TREEZ_DISPENSARY`
+  - uses `TREEZ_CLIENT_ID`
+  - uses `TREEZ_API_KEY`
+  - uses `TREEZ_API_BASE_URL`
+- `JaneOrderProvider`
+  - uses `JANE_BRIDGE_URL`
+  - optionally uses `JANE_BRIDGE_TOKEN`
+  - expects a merchant-operated bridge that returns the Mailroom bridge response contract
+- `BridgeOrderProvider`
+  - uses `BRIDGE_ORDER_PROVIDER_URL`
+  - optionally uses `BRIDGE_ORDER_PROVIDER_TOKEN`
+  - uses `BRIDGE_ORDER_PROVIDER_SOURCE`
+  - lets operators connect any vendor-specific lookup service without writing a Python adapter
+
+### Provider notes
+
+- `dutchie` is a direct API-backed adapter.
+- `treez` is a direct API-backed adapter.
+- `jane` is bridge-backed in this repo because Jane’s public merchant docs do not expose a stable read-only order lookup endpoint here.
+- `bridge` is the general fallback for Jane-like or private vendor integrations.
+
+### Bridge contract
+
+Bridge-backed providers send:
+
+```json
+{
+  "provider": "jane",
+  "order_number": "1001",
+  "customer_email": "alex@example.com",
+  "phone_last4": "4242"
+}
+```
+
+They expect one of these response shapes:
+
+- `{"status":"found","order_number":"1001","order_status":"Ready", ...}`
+- `{"status":"not_found","order_number":"1001","follow_up":"..."}`
+- `{"status":"identity_mismatch","order_number":"1001","follow_up":"...","verification_summary":"..."}`
+
+### Custom order providers
+
+Set:
+
+```bash
+ORDER_PROVIDER=custom
+ORDER_PROVIDER_FACTORY=your_module:build_provider
+```
+
+Your factory should return an object with:
+
+```python
+def lookup(order_number: str, *, customer_email: str | None = None, phone_last4: str | None = None):
+    ...
+```
+
+## Sample Data Files
+
+The repo ships with starter files:
+
+- `./examples/store_knowledge.sample.json`
+- `./examples/manual_orders.sample.json`
+
+These are meant for demos and local development. Real deployments should replace them with store-owned data.
 
 ## Key Commands
 
 ```bash
-make setup
-make wizard
-make connections
-make access
-make auth
-make doctor
-make run
-
 mailroom setup
 mailroom connections
 mailroom access
@@ -118,61 +213,30 @@ curl http://127.0.0.1:8787/dead-letter
 curl -X POST "http://127.0.0.1:8787/dead-letter/requeue/<message_id>?process_now=true"
 ```
 
-## Current Boundaries
-
-This repo is still an MVP. It does not currently provide:
-- a human approval gate before sending
-- denylists or richer sender policy rules beyond a simple email allowlist
-- multi-instance coordination
-- multi-mailbox orchestration
-- attachment ingestion
-- a real automated test suite
-
-Important runtime boundary:
-- Drive and Docs tools are available only in `google_api` mode
-- `gog` mode is email-only plus `research_web`
-
 ## Repo Map
 
 - `app/main.py`: FastAPI lifecycle, provider selection, and operator endpoints
-- `app/cli.py`: first-party CLI with setup, connections, doctor, auth, and run commands
-- `app/mailbox.py`: mailbox provider interface and message snapshot types
-- `app/google_mailbox.py`: Gmail API-backed mailbox provider
-- `app/gog_mailbox.py`: `gog`-backed send provider
-- `app/gog_watcher.py`: `gog gmail watch start/serve` manager
-- `app/gmail_worker.py`: provider-agnostic email processing, retries, dead-letter handling
 - `app/ai_agent.py`: OpenAI Responses API calls and tool loop
-- `app/tools.py`: Drive and Docs actions for `google_api` mode
+- `app/cx_toolset.py`: stable two-tool CX surface
+- `app/cx_providers.py`: provider interfaces, manual providers, Dutchie and Treez adapters, bridge providers, and custom loader
+- `app/gmail_worker.py`: provider-agnostic email processing, retries, dead-letter handling
 - `app/state.py`: SQLite schema and state access layer
-- `app/google_clients.py`: OAuth and Google API client creation for `google_api` mode
 - `app/settings.py`: environment-driven configuration
-- `SYSTEM_PROMPT.md`: default agent persona and behavioral rules
+- `SYSTEM_PROMPT.md`: customer-service prompt and guardrails
+- `examples/`: sample knowledge and manual order files
+
+## Current Boundaries
+
+- no manual approval before outbound send
+- no denylist or richer sender rules beyond allowlist mode
+- no attachment handling
+- no multi-instance coordination
+- no inventory search or product recommendation flow
+- no refund, cancellation, or order-edit execution
 
 ## Documentation
 
-Start here:
-- [docs/index.md](docs/index.md)
 - [docs/architecture.md](docs/architecture.md)
-- [docs/runtime-and-pipeline.md](docs/runtime-and-pipeline.md)
-- [docs/operations.md](docs/operations.md)
-
-Full set:
-- [docs/index.md](docs/index.md)
-- [docs/architecture.md](docs/architecture.md)
-- [docs/data-model.md](docs/data-model.md)
-- [docs/runtime-and-pipeline.md](docs/runtime-and-pipeline.md)
-- [docs/cli-reference.md](docs/cli-reference.md)
-- [docs/operations.md](docs/operations.md)
-- [docs/deployment.md](docs/deployment.md)
 - [docs/security-and-safety.md](docs/security-and-safety.md)
 - [docs/testing-and-quality.md](docs/testing-and-quality.md)
 - [docs/faq.md](docs/faq.md)
-- [docs/adr/](docs/adr)
-
-## Project Hygiene
-
-- License: [MIT](LICENSE)
-- Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
-- Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
-- Security policy: [SECURITY.md](SECURITY.md)
-- CI: GitHub Actions compile check in `.github/workflows/ci.yml`

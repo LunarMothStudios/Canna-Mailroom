@@ -2,17 +2,21 @@
 
 - Status: Accepted
 - Date: 2026-03-11
-- Last verified against commit `b6c46e6`
 
 ## Context
 
-The product needs reliable mailbox behavior, but still wants the model to perform a few useful side effects in Google Workspace and on the public web.
+The product needs reliable mailbox behavior, but still wants the model to use a very small set of explicit dispensary CX tools.
 
 ## Decision
 
 - keep Gmail read and send logic entirely in `GmailThreadWorker`
 - expose only explicit function tools from `EmailAgent._tool_specs()`
 - cap the tool loop at six rounds
+
+Current tool surface:
+
+- `lookup_order`
+- `search_store_knowledge`
 
 ## Consequences
 
@@ -28,4 +32,5 @@ Negative:
 ## Evidence In Code
 
 - `app/gmail_worker.py` owns Gmail operations
-- `app/ai_agent.py` defines `_tool_specs()`, `_run_tool()`, and the six-round loop
+- `app/ai_agent.py` defines the six-round tool loop
+- `app/cx_toolset.py` defines the explicit two-tool surface
