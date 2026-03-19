@@ -699,11 +699,12 @@ class DutchieOrderProvider(OrderProvider):
         customer_email: str | None,
         order_customer_id: Any,
         phone_last4: str | None,
-    ) -> str | None:
+    ) -> tuple[str, str | None]:
         if not customer_email and not phone_last4:
-            return None
+            return "not_requested", None
 
         verification_notes: list[str] = []
+        verified = False
         if customer_email:
             try:
                 payload = self._request_json(
@@ -713,23 +714,33 @@ class DutchieOrderProvider(OrderProvider):
                 )
             except ProviderAPIError as err:
                 if err.status_code == 404:
-                    return "The sender email could not be matched to a Dutchie customer record."
+                    return "unverified", "The sender email could not be matched to a Dutchie customer record."
                 if err.status_code == 403:
-                    verification_notes.append("Customer verification is not available with the current Dutchie permission scopes.")
+                    return "unverified", "Dutchie customer verification is not available with the current permission scopes."
                 else:
                     raise
             else:
-                if isinstance(payload, dict):
-                    customer_id = payload.get("customerId")
-                    if order_customer_id and customer_id and str(customer_id) != str(order_customer_id):
-                        return "The sender email matched a different Dutchie customer than the order record."
-                    if customer_id:
-                        verification_notes.append("Matched the sender email to the Dutchie customer record.")
+                if not isinstance(payload, dict):
+                    raise ProviderAPIError("Dutchie customer lookup returned an unexpected payload.", status_code=502)
+                customer_id = payload.get("customerId")
+                if not customer_id:
+                    return "unverified", "Dutchie customer verification did not return a customer record for the sender email."
+                if not order_customer_id:
+                    return "unverified", "Dutchie preorder status did not expose a customer id for sender verification."
+                if str(customer_id) != str(order_customer_id):
+                    return "mismatch", "The sender email matched a different Dutchie customer than the order record."
+                verified = True
+                verification_notes.append("Matched the sender email to the Dutchie customer record.")
 
         if phone_last4:
-            verification_notes.append("Dutchie order status does not expose enough data to verify phone last four digits.")
+            if verified:
+                verification_notes.append("Dutchie order status does not expose enough data to verify phone last four digits.")
+            else:
+                return "unverified", "Dutchie order status does not expose enough data to verify the provided phone last four digits."
 
-        return " ".join(verification_notes) if verification_notes else None
+        if verified:
+            return "matched", " ".join(verification_notes) if verification_notes else None
+        return "unverified", "Dutchie could not verify the sender against the order."
 
     def lookup(
         self,
@@ -754,16 +765,16 @@ class DutchieOrderProvider(OrderProvider):
         if not isinstance(order, dict):
             raise ProviderAPIError("Dutchie preorder status returned an unexpected payload.", status_code=502)
 
-        verification_summary = self._verify_customer(
+        verification_status, verification_summary = self._verify_customer(
             customer_email=customer_email,
             order_customer_id=order.get("customerId"),
             phone_last4=phone_last4,
         )
-        if verification_summary and verification_summary.lower().startswith("the sender email"):
+        if verification_status in {"mismatch", "unverified"}:
             return OrderVerificationMismatch(
                 order_number=clean_order_number,
                 follow_up="I found the order number, but I could not verify it belongs to the sender.",
-                verification_summary=verification_summary,
+                verification_summary=verification_summary or "Dutchie could not verify the sender against the order.",
                 source="dutchie",
             )
 
@@ -785,7 +796,7 @@ class DutchieOrderProvider(OrderProvider):
             notes.append(f"Provider note: {rejected_reason}")
         if order.get("isUpdateable") is True or order.get("isCancellable") is True:
             notes.append("This order may still be updateable or cancellable in Dutchie, but this email agent cannot change orders.")
-        if verification_summary and not verification_summary.lower().startswith("the sender email"):
+        if verification_status == "matched" and verification_summary:
             notes.append(verification_summary)
 
         return OrderLookupResult(
@@ -948,14 +959,18 @@ class TreezOrderProvider(OrderProvider):
             raise last_error
         raise ProviderAPIError("Treez ticket request failed before any response was returned.", status_code=503)
 
-    def _extract_verification_summary(
+    def _verify_customer(
         self,
         ticket: dict[str, Any],
         *,
         customer_email: str | None,
         phone_last4: str | None,
-    ) -> str | None:
+    ) -> tuple[str, str | None]:
+        if not customer_email and not phone_last4:
+            return "not_requested", None
+
         notes: list[str] = []
+        verified = False
         customer_payload = ticket.get("customer") if isinstance(ticket.get("customer"), dict) else {}
         order_email = _normalize_email(
             ticket.get("customer_email")
@@ -964,12 +979,12 @@ class TreezOrderProvider(OrderProvider):
         )
         if customer_email:
             expected_email = _normalize_email(customer_email)
-            if order_email and expected_email != order_email:
-                return "The sender email did not match the email on the Treez ticket."
-            if order_email:
-                notes.append("Matched the sender email to the Treez ticket.")
-            else:
-                notes.append("Treez lookup did not expose a stable email field for sender verification.")
+            if not order_email:
+                return "unverified", "Treez lookup did not expose a stable email field for sender verification."
+            if expected_email != order_email:
+                return "mismatch", "The sender email did not match the email on the Treez ticket."
+            verified = True
+            notes.append("Matched the sender email to the Treez ticket.")
 
         order_phone_last4 = _digits_only(
             ticket.get("phone_last4")
@@ -979,13 +994,19 @@ class TreezOrderProvider(OrderProvider):
         if phone_last4:
             expected_last4 = _digits_only(phone_last4)[-4:]
             if order_phone_last4 and expected_last4 and expected_last4 != order_phone_last4:
-                return "The phone digits provided did not match the Treez ticket."
+                return "mismatch", "The phone digits provided did not match the Treez ticket."
             if order_phone_last4 and expected_last4:
+                verified = True
                 notes.append("Matched the phone digits to the Treez ticket.")
             else:
-                notes.append("Treez lookup did not expose enough phone data to verify the last four digits.")
+                if verified:
+                    notes.append("Treez lookup did not expose enough phone data to verify the last four digits.")
+                else:
+                    return "unverified", "Treez lookup did not expose enough phone data to verify the provided last four digits."
 
-        return " ".join(notes) if notes else None
+        if verified:
+            return "matched", " ".join(notes) if notes else None
+        return "unverified", "Treez could not verify the sender against the order."
 
     def lookup(
         self,
@@ -1024,23 +1045,16 @@ class TreezOrderProvider(OrderProvider):
                 source="treez",
             )
 
-        verification_summary = self._extract_verification_summary(
+        verification_status, verification_summary = self._verify_customer(
             ticket,
             customer_email=customer_email,
             phone_last4=phone_last4,
         )
-        if verification_summary and verification_summary.lower().startswith("the sender email"):
+        if verification_status in {"mismatch", "unverified"}:
             return OrderVerificationMismatch(
                 order_number=clean_order_number,
                 follow_up="I found the order number, but I could not verify it belongs to the sender.",
-                verification_summary=verification_summary,
-                source="treez",
-            )
-        if verification_summary and verification_summary.lower().startswith("the phone digits"):
-            return OrderVerificationMismatch(
-                order_number=clean_order_number,
-                follow_up="I found the order number, but I could not verify it belongs to the sender.",
-                verification_summary=verification_summary,
+                verification_summary=verification_summary or "Treez could not verify the sender against the order.",
                 source="treez",
             )
 
@@ -1060,7 +1074,7 @@ class TreezOrderProvider(OrderProvider):
         ):
             if isinstance(candidate, str) and candidate.strip():
                 notes.append(candidate.strip())
-        if verification_summary and not verification_summary.lower().startswith("the "):
+        if verification_status == "matched" and verification_summary:
             notes.append(verification_summary)
 
         return OrderLookupResult(

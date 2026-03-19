@@ -88,6 +88,7 @@ class EmailAgentTests(unittest.TestCase):
         self.assertEqual(reply, "Your order is ready.")
         self.assertEqual(response_id, "resp-2")
         self.assertEqual(toolset.calls[0][0], "lookup_order")
+        self.assertEqual(toolset.calls[0][1]["customer_email"], "alex@example.com")
 
     def test_search_store_knowledge_function_call_is_executed(self):
         toolset = RecordingToolset()
@@ -136,6 +137,107 @@ class EmailAgentTests(unittest.TestCase):
 
         self.assertEqual(reply, "What is the order number?")
         self.assertEqual(toolset.calls, [])
+
+    def test_lookup_order_injects_trusted_sender_email(self):
+        toolset = RecordingToolset()
+        fake_client = FakeClient(
+            [
+                FakeResponse(
+                    "resp-1",
+                    "",
+                    [
+                        SimpleNamespace(
+                            type="function_call",
+                            name="lookup_order",
+                            arguments=json.dumps({"order_number": "100100"}),
+                            call_id="call-1",
+                        )
+                    ],
+                ),
+                FakeResponse("resp-2", "Your order is ready."),
+            ]
+        )
+        agent = EmailAgent(
+            api_key="test",
+            model="gpt-5.4",
+            toolset=toolset,
+            system_prompt_path=self.make_prompt_file(),
+            client=fake_client,
+        )
+
+        agent.respond_in_thread(
+            "Where is order 100100?",
+            thread_id="thread-1",
+            email_metadata={"from": "Customer Name <owner@example.com>", "subject": "Help"},
+        )
+
+        self.assertEqual(toolset.calls[0][1]["customer_email"], "owner@example.com")
+
+    def test_malformed_tool_arguments_are_returned_to_the_model_as_tool_errors(self):
+        toolset = RecordingToolset()
+        fake_client = FakeClient(
+            [
+                FakeResponse(
+                    "resp-1",
+                    "",
+                    [
+                        SimpleNamespace(
+                            type="function_call",
+                            name="lookup_order",
+                            arguments="{bad json",
+                            call_id="call-1",
+                        )
+                    ],
+                ),
+                FakeResponse("resp-2", "Please resend the order number."),
+            ]
+        )
+        agent = EmailAgent(
+            api_key="test",
+            model="gpt-5.4",
+            toolset=toolset,
+            system_prompt_path=self.make_prompt_file(),
+            client=fake_client,
+        )
+
+        reply, response_id = agent.respond_in_thread("Check my order", thread_id="thread-1")
+
+        self.assertEqual(reply, "Please resend the order number.")
+        self.assertEqual(response_id, "resp-2")
+        self.assertEqual(toolset.calls, [])
+        tool_output = fake_client.responses.calls[1]["input"][0]
+        self.assertEqual(json.loads(tool_output["output"])["status"], "error")
+
+    def test_non_converging_tool_loop_returns_safe_fallback_message(self):
+        toolset = RecordingToolset()
+        queued_responses = [
+            FakeResponse(
+                f"resp-{index}",
+                "",
+                [
+                    SimpleNamespace(
+                        type="function_call",
+                        name="lookup_order",
+                        arguments=json.dumps({"order_number": f"100{index}"}),
+                        call_id=f"call-{index}",
+                    )
+                ],
+            )
+            for index in range(1, 8)
+        ]
+        agent = EmailAgent(
+            api_key="test",
+            model="gpt-5.4",
+            toolset=toolset,
+            system_prompt_path=self.make_prompt_file(),
+            client=FakeClient(queued_responses),
+        )
+
+        reply, response_id = agent.respond_in_thread("Check my order", thread_id="thread-1")
+
+        self.assertEqual(reply, EmailAgent.TOOL_FALLBACK_MESSAGE)
+        self.assertEqual(response_id, "resp-7")
+        self.assertEqual(len(toolset.calls), EmailAgent.MAX_TOOL_ROUNDS)
 
     def test_tool_surface_is_exactly_the_two_cx_tools(self):
         toolset = RecordingToolset()

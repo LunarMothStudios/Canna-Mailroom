@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import email.utils
 import json
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,12 @@ from app.cx_models import AgentToolset
 
 
 class EmailAgent:
+    MAX_TOOL_ROUNDS = 6
+    TOOL_FALLBACK_MESSAGE = (
+        "I hit an internal issue while checking that. Please resend your question or order number, "
+        "and contact the store directly if you need urgent help."
+    )
+
     def __init__(
         self,
         api_key: str,
@@ -31,6 +38,40 @@ class EmailAgent:
     def _run_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         return self.toolset.run(name, args)
 
+    def _trusted_sender_email(self, email_metadata: dict[str, str] | None) -> str | None:
+        if not email_metadata:
+            return None
+        from_header = str(email_metadata.get("from") or "").strip()
+        parsed_email = email.utils.parseaddr(from_header)[1].strip().lower()
+        if parsed_email:
+            return parsed_email
+        return None
+
+    def _prepare_tool_args(
+        self,
+        *,
+        tool_name: str,
+        raw_arguments: str | None,
+        trusted_sender_email: str | None,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        try:
+            parsed_arguments = json.loads(raw_arguments or "{}")
+        except json.JSONDecodeError:
+            return None, {
+                "status": "error",
+                "error": "The tool arguments were invalid JSON.",
+            }
+
+        if not isinstance(parsed_arguments, dict):
+            return None, {
+                "status": "error",
+                "error": "The tool arguments must be a JSON object.",
+            }
+
+        if tool_name == "lookup_order" and trusted_sender_email:
+            parsed_arguments["customer_email"] = trusted_sender_email
+        return parsed_arguments, None
+
     def respond_in_thread(
         self,
         user_input: str,
@@ -48,6 +89,7 @@ class EmailAgent:
             )
 
         input_text = prefix + user_input
+        trusted_sender_email = self._trusted_sender_email(email_metadata)
 
         response = self.client.responses.create(
             model=self.model,
@@ -59,15 +101,19 @@ class EmailAgent:
             tools=self._tool_specs(),
         )
 
-        for _ in range(6):
+        for _ in range(self.MAX_TOOL_ROUNDS):
             function_calls = [item for item in response.output if item.type == "function_call"]
             if not function_calls:
                 break
 
             tool_outputs = []
             for call in function_calls:
-                args = json.loads(call.arguments or "{}")
-                result = self._run_tool(call.name, args)
+                args, argument_error = self._prepare_tool_args(
+                    tool_name=call.name,
+                    raw_arguments=call.arguments,
+                    trusted_sender_email=trusted_sender_email,
+                )
+                result = argument_error if argument_error is not None else self._run_tool(call.name, args or {})
                 tool_outputs.append(
                     {
                         "type": "function_call_output",
@@ -83,5 +129,8 @@ class EmailAgent:
                 tools=self._tool_specs(),
             )
 
+        remaining_function_calls = [item for item in response.output if item.type == "function_call"]
         final_text = response.output_text.strip()
+        if remaining_function_calls or not final_text:
+            return self.TOOL_FALLBACK_MESSAGE, response.id
         return final_text, response.id

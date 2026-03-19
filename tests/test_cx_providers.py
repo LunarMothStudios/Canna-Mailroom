@@ -213,6 +213,42 @@ class DutchieOrderProviderTests(unittest.TestCase):
 
         self.assertEqual(result.to_tool_output()["status"], "identity_mismatch")
 
+    def test_verification_is_blocked_when_customer_lookup_is_forbidden(self):
+        provider = self.make_provider()
+
+        def side_effect(method, path, **kwargs):
+            if (method, path) == ("GET", "/preorder/Status"):
+                return [{"preOrderId": 80245, "status": "Accepted", "customerId": 123}]
+            if (method, path) == ("POST", "/customer/customerLookup"):
+                raise ProviderAPIError("forbidden", status_code=403)
+            raise AssertionError(f"Unexpected Dutchie call: {(method, path)}")
+
+        provider._request_json = Mock(side_effect=side_effect)
+
+        result = provider.lookup("80245", customer_email="alex@example.com")
+
+        payload = result.to_tool_output()
+        self.assertEqual(payload["status"], "identity_mismatch")
+        self.assertIn("permission scopes", payload["verification_summary"])
+
+    def test_verification_is_blocked_when_order_has_no_customer_id(self):
+        provider = self.make_provider()
+
+        def side_effect(method, path, **kwargs):
+            if (method, path) == ("GET", "/preorder/Status"):
+                return [{"preOrderId": 80245, "status": "Accepted"}]
+            if (method, path) == ("POST", "/customer/customerLookup"):
+                return {"customerId": 123}
+            raise AssertionError(f"Unexpected Dutchie call: {(method, path)}")
+
+        provider._request_json = Mock(side_effect=side_effect)
+
+        result = provider.lookup("80245", customer_email="alex@example.com")
+
+        payload = result.to_tool_output()
+        self.assertEqual(payload["status"], "identity_mismatch")
+        self.assertIn("did not expose a customer id", payload["verification_summary"])
+
     def test_raises_for_auth_rate_limit_and_upstream_failures(self):
         for status_code in (401, 403, 429, 500):
             provider = self.make_provider()
@@ -363,3 +399,24 @@ class TreezOrderProviderTests(unittest.TestCase):
             result = provider.lookup("1001", customer_email="alex@example.com")
 
         self.assertEqual(result.to_tool_output()["status"], "identity_mismatch")
+
+    def test_lookup_returns_identity_mismatch_when_ticket_has_no_email_for_verification(self):
+        provider = self.make_provider()
+
+        def side_effect(base_url, path, **kwargs):
+            if path == "/auth/v1/config/api/gettokens":
+                return {"access_token": "treez-token"}
+            return {
+                "resultCode": "SUCCESS",
+                "data": {
+                    "order_number": "1001",
+                    "order_status": "accepted",
+                },
+            }
+
+        with patch("app.cx_providers._request_json_path", side_effect=side_effect):
+            result = provider.lookup("1001", customer_email="alex@example.com")
+
+        payload = result.to_tool_output()
+        self.assertEqual(payload["status"], "identity_mismatch")
+        self.assertIn("stable email field", payload["verification_summary"])
