@@ -1,5 +1,8 @@
 # Canna Mailroom
 
+[!WARNING]
+> `Alpha release`: Canna Mailroom is currently in active alpha. Use it with monitored inboxes, curated store knowledge, and allowlist senders. It is not positioned as a broad self-serve production release yet.
+
 Local-first, email-native dispensary CX agent runtime.
 
 Canna Mailroom treats each email thread as a session, keeps continuity with the OpenAI Responses API, and sends replies back into the same thread. The customer-facing agent is intentionally narrow: it can only call two read-only tools.
